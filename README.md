@@ -8,7 +8,7 @@
 npm.cmd run dev
 ```
 
-本机打开 `http://localhost:3000`。同一局域网的其他电脑使用 `http://本机局域网IP:3000`。
+本机打开 `http://localhost:4001`。同一局域网的其他电脑使用 `http://本机局域网IP:4001`。
 
 初始账号：
 
