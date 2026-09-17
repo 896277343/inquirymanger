@@ -12,7 +12,6 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@prisma/client": "latest",
     "bcryptjs": "latest",
     "jose": "latest",
     "lucide-react": "latest",
@@ -27,7 +26,6 @@
     "@types/react-dom": "latest",
     "eslint": "latest",
     "eslint-config-next": "latest",
-    "prisma": "latest",
     "typescript": "latest"
   }
 }
