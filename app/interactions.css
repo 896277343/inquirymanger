@@ -1,0 +1,20 @@
+.clickable-row {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.clickable-row:hover,
+.clickable-row:focus {
+  background: #f0f6ff;
+  outline: none;
+}
+
+.reminder-rules {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.reminder-rules p {
+  margin: 8px 0;
+}

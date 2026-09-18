@@ -96,6 +96,13 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_follow_inquiry ON follow_ups(inquiry_id);
 `);
 
+function ensureInquiryColumn(sql: string) {
+  try { db.exec(sql); }
+  catch (error) { if (!String(error).includes("duplicate column name")) throw error; }
+}
+ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accepted_at TEXT");
+ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accept_method TEXT");
+
 {
   const insert = db.prepare("INSERT OR IGNORE INTO users(username,display_name,password_hash,role,level) VALUES(?,?,?,?,?)");
   const seedUsers = [
