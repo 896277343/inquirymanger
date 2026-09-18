@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcryptjs";
+import { createInquiryNumber } from "./inquiry-number";
 
 const dataDir = path.join(process.cwd(), "data");
 fs.mkdirSync(dataDir, { recursive: true });
@@ -102,6 +103,16 @@ function ensureInquiryColumn(sql: string) {
 }
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accepted_at TEXT");
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accept_method TEXT");
+
+const legacyInquiryNumbers = db.prepare("SELECT id,inquiry_no,created_at FROM inquiries").all() as Array<{ id:number; inquiry_no:string|null; created_at:string }>;
+const updateInquiryNumber = db.prepare("UPDATE inquiries SET inquiry_no=? WHERE id=?");
+for (const inquiry of legacyInquiryNumbers) {
+  if (inquiry.inquiry_no && /^INQ-\d{4}-\d+$/.test(inquiry.inquiry_no)) {
+    let next = createInquiryNumber(inquiry.created_at);
+    while (db.prepare("SELECT 1 FROM inquiries WHERE inquiry_no=?").get(next)) next = createInquiryNumber(inquiry.created_at);
+    updateInquiryNumber.run(next, inquiry.id);
+  }
+}
 
 {
   const insert = db.prepare("INSERT OR IGNORE INTO users(username,display_name,password_hash,role,level) VALUES(?,?,?,?,?)");
