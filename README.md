@@ -25,6 +25,23 @@ SQLite 数据库保存在 `data/inquiries.db`。备份时需同时备份该文�
 
 建议构建机和发布服务器都使用 Linux x64，并安装相同大版本的 Node.js（要求 Node.js 22.5+，推荐 Node.js 22 LTS）。发布服务器不需要执行 `npm install` 或 `npm run build`。
 
+### 自动编译并发布
+
+在编译服务器执行下面一条命令，即可自动拉取、编译、打包、上传并更新发布服务器：
+
+```bash
+cd ~/inquirymanger
+bash scripts/build-and-deploy.sh
+```
+
+默认发布到 `root@43.135.134.204`。如需指定其他服务器：
+
+```bash
+DEPLOY_HOST=root@服务器IP bash scripts/build-and-deploy.sh
+```
+
+发布前会自动将服务器的 `data` 和 `.env.local` 备份到 `/opt/backups/inquiry-manager/日期时间/`。
+
 在构建机执行：
 
 ```bash
