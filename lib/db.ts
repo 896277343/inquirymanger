@@ -22,7 +22,7 @@ db.exec(`
     role TEXT NOT NULL CHECK(role IN ('LEADER','SALES')),
     level TEXT NOT NULL DEFAULT 'NEW',
     active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
   CREATE TABLE IF NOT EXISTS customers (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -33,8 +33,8 @@ db.exec(`
     phone TEXT,
     alternate_emails TEXT,
     note TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
   CREATE TABLE IF NOT EXISTS inquiries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,8 +50,8 @@ db.exec(`
     deal_amount REAL,
     currency TEXT DEFAULT 'USD',
     created_by INTEGER NOT NULL REFERENCES users(id),
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
   CREATE TABLE IF NOT EXISTS follow_ups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,7 +61,7 @@ db.exec(`
     content TEXT NOT NULL,
     customer_reply TEXT,
     next_follow_up_at TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
   CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,18 +71,18 @@ db.exec(`
     entity_id INTEGER,
     summary TEXT NOT NULL,
     details TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
   CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
   CREATE TABLE IF NOT EXISTS crm_user_mappings (
     user_id INTEGER PRIMARY KEY REFERENCES users(id),
     crm_username TEXT NOT NULL,
     crm_password TEXT NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
   CREATE TABLE IF NOT EXISTS crm_syncs (
     inquiry_id INTEGER PRIMARY KEY REFERENCES inquiries(id),
@@ -103,6 +103,25 @@ function ensureInquiryColumn(sql: string) {
 }
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accepted_at TEXT");
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accept_method TEXT");
+
+db.exec("BEGIN IMMEDIATE");
+try {
+  const timeMigration = db.prepare("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES('local_time_migration_v1','running',datetime('now','localtime'))").run();
+  if (timeMigration.changes > 0) {
+    db.exec(`
+      UPDATE users SET created_at=datetime(created_at,'+8 hours');
+      UPDATE customers SET created_at=datetime(created_at,'+8 hours');
+      UPDATE inquiries SET created_at=datetime(created_at,'+8 hours');
+      UPDATE follow_ups SET created_at=datetime(created_at,'+8 hours');
+      UPDATE audit_logs SET created_at=datetime(created_at,'+8 hours');
+      UPDATE app_settings SET value='complete',updated_at=datetime('now','localtime') WHERE key='local_time_migration_v1';
+    `);
+  }
+  db.exec("COMMIT");
+} catch (error) {
+  db.exec("ROLLBACK");
+  throw error;
+}
 
 const legacyInquiryNumbers = db.prepare("SELECT id,inquiry_no,created_at FROM inquiries").all() as Array<{ id:number; inquiry_no:string|null; created_at:string }>;
 const updateInquiryNumber = db.prepare("UPDATE inquiries SET inquiry_no=? WHERE id=?");
@@ -136,6 +155,6 @@ export function row<T>(sql: string, ...params: any[]): T | undefined {
 }
 
 export function audit(userId: number, action: string, entityType: string, entityId: number | null, summary: string, details?: unknown) {
-  db.prepare("INSERT INTO audit_logs(user_id,action,entity_type,entity_id,summary,details) VALUES(?,?,?,?,?,?)")
+  db.prepare("INSERT INTO audit_logs(user_id,action,entity_type,entity_id,summary,details,created_at) VALUES(?,?,?,?,?,?,datetime('now','localtime'))")
     .run(userId, action, entityType, entityId, summary, details ? JSON.stringify(details) : null);
 }
