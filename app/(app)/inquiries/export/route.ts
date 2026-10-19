@@ -18,8 +18,8 @@ export async function GET(request:Request){
   await requireLeader();
   const url=new URL(request.url),owner=url.searchParams.get("owner")||"",status=url.searchParams.get("status")||"";
   const conditions:string[]=[],values:Array<string|number>=[];
-  if(owner==="public_pool")conditions.push("i.owner_id IS NULL AND i.status='NO_REPLY'");
-  else if(owner==="unassigned")conditions.push("i.owner_id IS NULL AND i.status<>'NO_REPLY'");
+  if(owner==="public_pool")conditions.push("i.owner_id IS NULL AND i.status IN ('NO_REPLY','PUBLIC_POOL')");
+  else if(owner==="unassigned")conditions.push("i.owner_id IS NULL AND i.status NOT IN ('NO_REPLY','PUBLIC_POOL')");
   else if(/^\d+$/.test(owner)){conditions.push("i.owner_id=?");values.push(Number(owner))}
   if(status&&status in statuses){conditions.push("i.status=?");values.push(status)}
   const where=conditions.length?`WHERE ${conditions.join(" AND ")}`:"";
@@ -27,7 +27,7 @@ export async function GET(request:Request){
   const header=["询盘编号","客户邮箱","联系人","公司名称","国家/地区","电话/WhatsApp","询盘来源","产品分类","客户需求","负责人","当前状态","分配时间","接受时间","下次跟进","录入时间"];
   const body=data.map(item=>[
     item.inquiry_no,item.primary_email,item.name,item.company,item.country,item.phone,sources[item.source]||item.source,item.product_category,item.requirement,
-    item.status==="NO_REPLY"?"公海":item.owner_name||"待分配",statuses[item.status]||item.status,item.assigned_at,item.accepted_at,item.next_follow_up_at,item.created_at,
+    item.status==="NO_REPLY"||item.status==="PUBLIC_POOL"?"公海":item.owner_name||"待分配",statuses[item.status]||item.status,item.assigned_at,item.accepted_at,item.next_follow_up_at,item.created_at,
   ].map(csvCell).join(","));
   const csv=`\uFEFF${header.map(csvCell).join(",")}\r\n${body.join("\r\n")}`;
   const stamp=new Date().toISOString().slice(0,10).replace(/-/g,"");

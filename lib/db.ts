@@ -103,6 +103,7 @@ function ensureInquiryColumn(sql: string) {
 }
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accepted_at TEXT");
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accept_method TEXT");
+ensureInquiryColumn("ALTER TABLE users ADD COLUMN last_login_at TEXT");
 
 db.exec("BEGIN IMMEDIATE");
 try {

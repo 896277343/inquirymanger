@@ -8,6 +8,7 @@ export async function login(_: string | undefined, formData: FormData) {
   const password = String(formData.get("password") || "");
   const user = db.prepare("SELECT id,username,display_name,password_hash,role,active FROM users WHERE username=?").get(username) as any;
   if (!user || !user.active || !bcrypt.compareSync(password, user.password_hash)) return "账号或密码错误";
+  db.prepare("UPDATE users SET last_login_at=datetime('now','localtime') WHERE id=?").run(user.id);
   await createSession({ id: user.id, username:user.username, name:user.display_name, role:user.role });
   redirect("/dashboard");
 }
