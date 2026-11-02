@@ -92,6 +92,27 @@ db.exec(`
     synced_at TEXT,
     last_error TEXT
   );
+  CREATE TABLE IF NOT EXISTS inbound_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_system TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    site TEXT,
+    page_url TEXT,
+    name TEXT,
+    email TEXT,
+    company TEXT,
+    country TEXT,
+    phone TEXT,
+    product TEXT,
+    message TEXT NOT NULL,
+    submitted_at TEXT,
+    raw_json TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING','IMPORTED','IGNORED')),
+    inquiry_id INTEGER REFERENCES inquiries(id),
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(source_system, external_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_inbound_status ON inbound_submissions(status, created_at);
   CREATE INDEX IF NOT EXISTS idx_inquiry_owner ON inquiries(owner_id);
   CREATE INDEX IF NOT EXISTS idx_inquiry_customer ON inquiries(customer_id);
   CREATE INDEX IF NOT EXISTS idx_follow_inquiry ON follow_ups(inquiry_id);
