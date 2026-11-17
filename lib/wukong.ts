@@ -25,6 +25,8 @@ type SyncConfig = {
   inquiryNo: string;
   status: string;
   putInPool?: boolean;
+  onCustomerCreated?: (customerId: number) => void;
+  onContactCreated?: (customerId: number) => void;
 };
 
 function apiUrl(base: string, path: string) {
@@ -123,8 +125,11 @@ export async function syncToWukong(config: SyncConfig) {
     }
     if (!created) throw new Error("悟空CRM邮件重复次数过多，已停止自动编号");
     customerId = Number(created.customer_id);
+    if (!Number.isSafeInteger(customerId) || customerId < 1) throw new Error("悟空CRM未返回有效客户编号");
+    config.onCustomerCreated?.(customerId);
   }
 
+  let contactCreated = false;
   try {
     await post(
       config.base,
@@ -139,12 +144,21 @@ export async function syncToWukong(config: SyncConfig) {
       },
       auth,
     );
+    contactCreated = true;
+    config.onContactCreated?.(customerId);
     if (config.putInPool) {
       await post(config.base, "crm/customer/putInPool", { "customer_id[]": String(customerId) }, auth);
     }
   } catch (error) {
     (error as any).customerId = customerId;
+    (error as any).contactCreated = contactCreated;
     throw error;
   }
   return { customerId };
+}
+
+export async function putWukongCustomerInPool(base: string, username: string, password: string, customerId: number) {
+  const login = await post(base, "admin/base/login", { username, password });
+  const auth = { authKey: String(login.authKey), sessionId: String(login.sessionId) };
+  await post(base, "crm/customer/putInPool", { "customer_id[]": String(customerId) }, auth);
 }

@@ -11,7 +11,7 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
   const q=row<Inquiry>("SELECT i.*,c.primary_email,c.name,c.company,c.country,c.phone,c.alternate_emails,c.note,u.display_name owner_name FROM inquiries i JOIN customers c ON c.id=i.customer_id LEFT JOIN users u ON u.id=i.owner_id WHERE i.id=?",id);
   if(!q||(s.role==="SALES"&&q.owner_id!==s.id))notFound();
   const staff=rows<any>(`SELECT u.id,u.display_name,u.level,u.last_login_at,
-    (SELECT COUNT(DISTINCT al.entity_id) FROM audit_logs al WHERE al.entity_type='INQUIRY' AND ((al.action='ASSIGN' AND al.summary='分配给 ' || u.display_name) OR (al.action='TRANSFER' AND json_extract(al.details,'$.toOwnerId')=u.id))) assigned_total,
+    (SELECT COUNT(DISTINCT al.entity_id) FROM audit_logs al WHERE al.entity_type='INQUIRY' AND ((al.action='ASSIGN' AND (json_extract(al.details,'$.ownerId')=u.id OR (al.details IS NULL AND al.summary='分配给 ' || u.display_name))) OR (al.action='TRANSFER' AND json_extract(al.details,'$.toOwnerId')=u.id))) assigned_total,
     (SELECT i.assigned_at FROM inquiries i WHERE i.owner_id=u.id AND i.assigned_at IS NOT NULL ORDER BY i.assigned_at DESC LIMIT 1) last_assigned_at,
     (SELECT i.product_category FROM inquiries i WHERE i.owner_id=u.id AND i.assigned_at IS NOT NULL ORDER BY i.assigned_at DESC LIMIT 1) last_product
     FROM users u WHERE u.role='SALES' AND u.active=1 ORDER BY u.id`);
