@@ -5,7 +5,8 @@ const schema={type:"object",additionalProperties:false,properties:{email:{type:"
 const instructions=`你是外贸询盘信息提取助手。根据客户邮件或在线聊天原文，提取客户邮箱、姓名、公司、国家、电话/WhatsApp、产品分类、完整需求摘要和补充备注。不要虚构缺失信息，缺失字段返回空字符串。产品分类必须从给定枚举中选择。回收处理量较大、设备级或固定式方案归为中大型SF6回收车；便携或小容量归为小型SF6回收车。requirement 用中文清晰概括，但保留型号、数量、技术参数、目的地等关键信息。只输出JSON。`;
 
 export async function analyzeInquiry(raw:string){
-  await requireLeader();if(!raw.trim())return {ok:false,error:"请先粘贴询盘原文"} as const;
+  const leader=await requireLeader();if(!raw.trim())return {ok:false,error:"请先粘贴询盘原文"} as const;
+  audit(leader.id,"AI_ANALYZE","INQUIRY",null,"使用AI识别询盘原文",{characters:raw.length});
   const get=(key:string)=>row<{value:string}>("SELECT value FROM app_settings WHERE key=?",key)?.value;
   const protocol=get("ai_protocol")||"RESPONSES",endpoint=get("ai_endpoint"),model=get("ai_model")||"gpt-5.5",encryptedKey=get("ai_api_key");
   if(!endpoint||!encryptedKey)return {ok:false,error:"请先在“AI接口配置”中填写请求地址和 API Key"} as const;

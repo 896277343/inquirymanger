@@ -1,5 +1,5 @@
 import { requireLeader } from "@/lib/auth";
-import { rows } from "@/lib/db";
+import { audit, rows } from "@/lib/db";
 import { sources, statuses } from "@/lib/labels";
 
 type ExportRow = {
@@ -15,15 +15,17 @@ function csvCell(value:unknown){
 }
 
 export async function GET(request:Request){
-  await requireLeader();
-  const url=new URL(request.url),owner=url.searchParams.get("owner")||"",status=url.searchParams.get("status")||"";
+  const leader=await requireLeader();
+  const url=new URL(request.url),owner=url.searchParams.get("owner")||"",status=url.searchParams.get("status")||"",keyword=(url.searchParams.get("q")||"").trim().slice(0,100);
   const conditions:string[]=[],values:Array<string|number>=[];
   if(owner==="public_pool")conditions.push("i.owner_id IS NULL AND i.status IN ('NO_REPLY','PUBLIC_POOL')");
   else if(owner==="unassigned")conditions.push("i.owner_id IS NULL AND i.status NOT IN ('NO_REPLY','PUBLIC_POOL')");
   else if(/^\d+$/.test(owner)){conditions.push("i.owner_id=?");values.push(Number(owner))}
   if(status&&status in statuses){conditions.push("i.status=?");values.push(status)}
+  if(keyword){conditions.push("(instr(lower(i.inquiry_no),lower(?))>0 OR instr(lower(c.primary_email),lower(?))>0 OR instr(lower(COALESCE(c.name,'')),lower(?))>0 OR instr(lower(COALESCE(c.company,'')),lower(?))>0 OR instr(lower(i.product_category),lower(?))>0 OR instr(lower(i.requirement),lower(?))>0)");values.push(...Array(6).fill(keyword))}
   const where=conditions.length?`WHERE ${conditions.join(" AND ")}`:"";
   const data=rows<ExportRow>(`SELECT i.inquiry_no,c.primary_email,c.name,c.company,c.country,c.phone,i.source,i.product_category,i.requirement,i.status,u.display_name owner_name,i.assigned_at,i.accepted_at,i.next_follow_up_at,i.created_at FROM inquiries i JOIN customers c ON c.id=i.customer_id LEFT JOIN users u ON u.id=i.owner_id ${where} ORDER BY i.created_at DESC`,...values);
+  audit(leader.id,"EXPORT","INQUIRY",null,`导出询盘 CSV，共 ${data.length} 条`,{owner,status,keyword,count:data.length});
   const header=["询盘编号","客户邮箱","联系人","公司名称","国家/地区","电话/WhatsApp","询盘来源","产品分类","客户需求","负责人","当前状态","分配时间","接受时间","下次跟进","录入时间"];
   const body=data.map(item=>[
     item.inquiry_no,item.primary_email,item.name,item.company,item.country,item.phone,sources[item.source]||item.source,item.product_category,item.requirement,

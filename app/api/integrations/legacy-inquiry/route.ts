@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { db, row } from "@/lib/db";
+import { audit, db, row } from "@/lib/db";
 
 export const runtime = "nodejs";
 
@@ -49,6 +49,8 @@ export async function POST(request: Request) {
       field(input.company, 255), field(input.country, 255), field(input.phone, 255),
       field(input.product, 500), message, field(input.submittedAt, 32), raw
     );
+    const systemActor = row<{id:number}>("SELECT id FROM users WHERE role='LEADER' ORDER BY id LIMIT 1");
+    if (systemActor) audit(systemActor.id,"AUTO_INBOUND","INBOUND_SUBMISSION",Number(result.lastInsertRowid),`旧网站正常留言已接收 #${externalId}`);
     return response({ ok: true, id: Number(result.lastInsertRowid), duplicate: false }, 201);
   } catch (error) {
     // A retry can arrive at the same time as the first request.

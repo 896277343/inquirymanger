@@ -1,4 +1,6 @@
 "use server";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-export async function logout(){ (await cookies()).delete("sf6_session"); redirect("/login"); }
+import { getSession } from "@/lib/auth";
+import { audit } from "@/lib/db";
+export async function logout(){ const session=await getSession();if(session)audit(session.id,"LOGOUT","USER",session.id,"退出登录");(await cookies()).delete("sf6_session"); redirect("/login"); }
