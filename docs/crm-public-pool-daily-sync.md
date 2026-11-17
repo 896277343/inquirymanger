@@ -22,6 +22,14 @@ header = "Authorization: Bearer 你的同一个密钥"
 
 执行 `chmod 600 /etc/crm-pool-sync.curl`。随后试运行：
 
+如果要先只同步一条，请在领导账号的“询盘管理”找到当前公海中的目标询盘，打开详情，从网址 `/inquiries/123` 读取其数字 ID。确认这条允许真实写入 CRM 后执行：
+
+```bash
+curl --fail-with-body --silent --show-error --max-time 120 --config /etc/crm-pool-sync.curl -X POST 'http://127.0.0.1:4001/api/jobs/crm-public-pool?inquiryId=123'
+```
+
+其中 `123` 换成实际 ID；这条命令只处理指定询盘，不会处理其他公海记录。没有指定 `inquiryId` 的请求仍是批量同步：
+
 ```bash
 curl --fail-with-body --silent --show-error --max-time 1800 --config /etc/crm-pool-sync.curl -X POST http://127.0.0.1:4001/api/jobs/crm-public-pool
 ```

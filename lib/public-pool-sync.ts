@@ -9,7 +9,7 @@ type PoolInquiry = {
   crm_customer_id: number | null; crm_contact_created: number | null;
 };
 
-export async function syncPublicPoolBatch(limit = 50) {
+export async function syncPublicPoolBatch(limit = 50, inquiryId?: number) {
   const leader = row<{id:number}>("SELECT id FROM users WHERE role='LEADER' AND active=1 ORDER BY id LIMIT 1");
   const base = row<{value:string}>("SELECT value FROM app_settings WHERE key='crm_base_url'")?.value;
   const mapping = leader && row<{crm_username:string;crm_password:string}>("SELECT crm_username,crm_password FROM crm_user_mappings WHERE user_id=?", leader.id);
@@ -23,8 +23,9 @@ export async function syncPublicPoolBatch(limit = 50) {
     FROM inquiries i JOIN customers c ON c.id=i.customer_id
     LEFT JOIN crm_syncs cs ON cs.inquiry_id=i.id
     WHERE i.owner_id IS NULL AND i.status IN ('NO_REPLY','PUBLIC_POOL')
-      AND cs.crm_pool_synced_at IS NULL
-    ORDER BY CASE WHEN cs.crm_pool_last_error IS NULL THEN 0 ELSE 1 END, i.id ASC LIMIT ?`, Math.min(Math.max(1, limit), 50));
+      AND cs.crm_pool_synced_at IS NULL AND (? IS NULL OR i.id = ?)
+    ORDER BY CASE WHEN cs.crm_pool_last_error IS NULL THEN 0 ELSE 1 END, i.id ASC LIMIT ?`,
+    inquiryId ?? null, inquiryId ?? null, Math.min(Math.max(1, limit), 50));
   let synced = 0;
   let failed = 0;
   for (const inquiry of inquiries) {
