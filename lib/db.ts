@@ -21,6 +21,7 @@ db.exec(`
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('LEADER','SALES')),
     level TEXT NOT NULL DEFAULT 'NEW',
+    assignable INTEGER NOT NULL DEFAULT 1,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
   );
@@ -125,11 +126,21 @@ function ensureInquiryColumn(sql: string) {
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accepted_at TEXT");
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accept_method TEXT");
 ensureInquiryColumn("ALTER TABLE users ADD COLUMN last_login_at TEXT");
+ensureInquiryColumn("ALTER TABLE users ADD COLUMN assignable INTEGER NOT NULL DEFAULT 1");
 ensureInquiryColumn("ALTER TABLE crm_syncs ADD COLUMN crm_pool_synced_at TEXT");
 ensureInquiryColumn("ALTER TABLE crm_syncs ADD COLUMN crm_pool_last_error TEXT");
 
 db.exec("BEGIN IMMEDIATE");
 try {
+  const observerMigration = db.prepare("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES('think1023_observer_v1','complete',datetime('now','localtime'))").run();
+  if (observerMigration.changes > 0) {
+    const observer = db.prepare("SELECT id FROM users WHERE username='think1023' AND role='SALES'").get() as {id:number}|undefined;
+    if (observer) {
+      db.prepare("UPDATE users SET assignable=0 WHERE id=?").run(observer.id);
+      db.prepare("INSERT INTO audit_logs(user_id,action,entity_type,entity_id,summary,created_at) VALUES(?,'AUTO_UPDATE','USER',?,'将 think1023 设为不可接收分配的观察账号',datetime('now','localtime'))")
+        .run(observer.id,observer.id);
+    }
+  }
   const timeMigration = db.prepare("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES('local_time_migration_v1','running',datetime('now','localtime'))").run();
   if (timeMigration.changes > 0) {
     db.exec(`
@@ -140,6 +151,19 @@ try {
       UPDATE audit_logs SET created_at=datetime(created_at,'+8 hours');
       UPDATE app_settings SET value='complete',updated_at=datetime('now','localtime') WHERE key='local_time_migration_v1';
     `);
+  }
+  const poolAuditMigration = db.prepare("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES('manual_pool_sync_audit_v1','complete',datetime('now','localtime'))").run();
+  if (poolAuditMigration.changes > 0) {
+    db.exec(`UPDATE crm_syncs SET crm_pool_synced_at=(
+      SELECT MAX(al.created_at) FROM audit_logs al
+      WHERE al.entity_type='INQUIRY' AND al.entity_id=crm_syncs.inquiry_id
+        AND al.action='CRM_SYNC' AND al.summary LIKE '同步到悟空CRM公海%'
+    )
+    WHERE crm_pool_synced_at IS NULL AND EXISTS (
+      SELECT 1 FROM audit_logs al WHERE al.entity_type='INQUIRY'
+        AND al.entity_id=crm_syncs.inquiry_id AND al.action='CRM_SYNC'
+        AND al.summary LIKE '同步到悟空CRM公海%'
+    )`);
   }
   db.exec("COMMIT");
 } catch (error) {

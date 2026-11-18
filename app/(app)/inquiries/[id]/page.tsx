@@ -14,7 +14,7 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
     (SELECT COUNT(DISTINCT al.entity_id) FROM audit_logs al WHERE al.entity_type='INQUIRY' AND ((al.action='ASSIGN' AND (json_extract(al.details,'$.ownerId')=u.id OR (al.details IS NULL AND al.summary='分配给 ' || u.display_name))) OR (al.action='TRANSFER' AND json_extract(al.details,'$.toOwnerId')=u.id))) assigned_total,
     (SELECT i.assigned_at FROM inquiries i WHERE i.owner_id=u.id AND i.assigned_at IS NOT NULL ORDER BY i.assigned_at DESC LIMIT 1) last_assigned_at,
     (SELECT i.product_category FROM inquiries i WHERE i.owner_id=u.id AND i.assigned_at IS NOT NULL ORDER BY i.assigned_at DESC LIMIT 1) last_product
-    FROM users u WHERE u.role='SALES' AND u.active=1 ORDER BY u.id`);
+    FROM users u WHERE u.role='SALES' AND u.active=1 AND u.assignable=1 ORDER BY u.id`);
   const follows=rows<any>("SELECT f.*,u.display_name user_name FROM follow_ups f JOIN users u ON u.id=f.user_id WHERE inquiry_id=? ORDER BY f.created_at DESC",id);
   const crmSync=row<any>("SELECT * FROM crm_syncs WHERE inquiry_id=?",id);
   const isPublicPool=q.status==="NO_REPLY"||q.status==="PUBLIC_POOL";

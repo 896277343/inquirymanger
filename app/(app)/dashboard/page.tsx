@@ -4,7 +4,8 @@ import { row, rows } from "@/lib/db";
 import { sources, statuses } from "@/lib/labels";
 
 type Item = { id:number; inquiry_no:string; primary_email:string; company:string|null; product_category:string; source:string; status:string; owner_name:string|null; updated_at:string; assigned_at?:string; accepted_at?:string; accept_method?:string; next_follow_up_at?:string; last_follow_up_at?:string; acceptance_deadline?:string; is_overdue?:number };
-type SalesSummary = { id:number; display_name:string; total:number; cumulative:number; fresh:number; active:number; quoted:number; won:number; overdue:number };
+type SalesSummary = { id:number; display_name:string; total:number; fresh:number; active:number; quoted:number; won:number; overdue:number };
+type SalesFlow = { id:number; display_name:string; received:number; retained:number; followed:number; unfollowed:number; transferred:number; unaccepted_transfers:number; pool_out:number; auto_returned:number };
 type WeeklyOverall = { new_count:number; assigned_count:number; follow_count:number; quoted_count:number; won_count:number; won_amount:number };
 type WeeklyRow = { label:string; inquiries:number; followups:number; quoted:number; won:number };
 
@@ -28,14 +29,49 @@ export default async function Dashboard() {
   const dormant = s.role === "LEADER" ? rows<Item>(`SELECT i.*,c.primary_email,c.company,u.display_name owner_name,MAX(f.created_at) last_follow_up_at FROM inquiries i JOIN customers c ON c.id=i.customer_id JOIN users u ON u.id=i.owner_id JOIN follow_ups f ON f.inquiry_id=i.id WHERE i.status NOT IN ('WON','LOST') GROUP BY i.id HAVING MAX(f.created_at) <= datetime('now','localtime','-3 months') ORDER BY last_follow_up_at ASC`) : [];
   const salesSummary = s.role === "LEADER" ? rows<SalesSummary>(`SELECT u.id,u.display_name,
     COUNT(i.id) total,
-    (SELECT COUNT(DISTINCT al.entity_id) FROM audit_logs al WHERE al.entity_type='INQUIRY' AND ((al.action='ASSIGN' AND (json_extract(al.details,'$.ownerId')=u.id OR (al.details IS NULL AND al.summary='分配给 ' || u.display_name))) OR (al.action='TRANSFER' AND json_extract(al.details,'$.toOwnerId')=u.id))) cumulative,
     SUM(CASE WHEN i.status='NEW' THEN 1 ELSE 0 END) fresh,
     SUM(CASE WHEN i.status IN ('CONTACTING','TECHNICAL','NEGOTIATING','WAITING','PAUSED') THEN 1 ELSE 0 END) active,
     SUM(CASE WHEN i.status='QUOTED' THEN 1 ELSE 0 END) quoted,
     SUM(CASE WHEN i.status='WON' THEN 1 ELSE 0 END) won,
     SUM(CASE WHEN i.next_follow_up_at IS NOT NULL AND i.next_follow_up_at < datetime('now','localtime') AND i.status NOT IN ('WON','LOST') THEN 1 ELSE 0 END) overdue
     FROM users u LEFT JOIN inquiries i ON i.owner_id=u.id
-    WHERE u.role='SALES' AND u.active=1 GROUP BY u.id ORDER BY u.id`) : [];
+    WHERE u.role='SALES' AND u.active=1 AND u.assignable=1 GROUP BY u.id ORDER BY u.id`) : [];
+  const salesFlow = s.role === "LEADER" ? rows<SalesFlow>(`WITH received AS (
+      SELECT u.id user_id, al.entity_id inquiry_id
+      FROM users u JOIN audit_logs al ON al.entity_type='INQUIRY' AND al.action='ASSIGN'
+        AND (json_extract(al.details,'$.ownerId')=u.id
+          OR (al.details IS NULL AND al.summary='分配给 ' || u.display_name))
+      UNION
+      SELECT json_extract(al.details,'$.toOwnerId') user_id, al.entity_id inquiry_id
+      FROM audit_logs al WHERE al.entity_type='INQUIRY' AND al.action='TRANSFER'
+        AND json_extract(al.details,'$.toOwnerId') IS NOT NULL
+      UNION
+      SELECT owner_id user_id, id inquiry_id FROM inquiries WHERE owner_id IS NOT NULL
+    ), activity AS (
+      SELECT user_id,entity_id inquiry_id FROM audit_logs
+        WHERE entity_type='INQUIRY' AND action='ACCEPT'
+      UNION
+      SELECT user_id,inquiry_id FROM follow_ups
+      UNION
+      SELECT owner_id user_id,id inquiry_id FROM inquiries
+        WHERE owner_id IS NOT NULL AND accepted_at IS NOT NULL
+    )
+    SELECT u.id,u.display_name,
+      (SELECT COUNT(*) FROM received r WHERE r.user_id=u.id) received,
+      (SELECT COUNT(*) FROM inquiries i WHERE i.owner_id=u.id) retained,
+      (SELECT COUNT(*) FROM received r WHERE r.user_id=u.id AND EXISTS (
+        SELECT 1 FROM activity a WHERE a.user_id=u.id AND a.inquiry_id=r.inquiry_id)) followed,
+      (SELECT COUNT(*) FROM received r WHERE r.user_id=u.id AND NOT EXISTS (
+        SELECT 1 FROM activity a WHERE a.user_id=u.id AND a.inquiry_id=r.inquiry_id)) unfollowed,
+      (SELECT COUNT(*) FROM audit_logs al WHERE al.user_id=u.id AND al.action='TRANSFER'
+        AND al.entity_type='INQUIRY') transferred,
+      (SELECT COUNT(*) FROM audit_logs al WHERE al.user_id=u.id AND al.action='TRANSFER'
+        AND al.entity_type='INQUIRY' AND json_extract(al.details,'$.before.accepted_at') IS NULL) unaccepted_transfers,
+      (SELECT COUNT(*) FROM audit_logs al WHERE al.user_id=u.id AND al.action='UPDATE'
+        AND al.entity_type='INQUIRY' AND json_extract(al.details,'$.after.status')='NO_REPLY') pool_out,
+      (SELECT COUNT(*) FROM audit_logs al WHERE al.user_id=u.id AND al.action='AUTO_RETURN'
+        AND al.entity_type='INQUIRY') auto_returned
+    FROM users u WHERE u.role='SALES' AND u.active=1 AND u.assignable=1 ORDER BY u.id`) : [];
   const poolSync = s.role === "LEADER" ? row<{pending:number;synced:number;failed:number}>(`SELECT
     SUM(CASE WHEN cs.crm_pool_synced_at IS NULL THEN 1 ELSE 0 END) pending,
     SUM(CASE WHEN cs.crm_pool_synced_at IS NOT NULL THEN 1 ELSE 0 END) synced,
@@ -55,7 +91,7 @@ export default async function Dashboard() {
     (SELECT COUNT(*) FROM follow_ups f WHERE f.user_id=u.id AND f.created_at>=${weekStart}) followups,
     (SELECT COUNT(DISTINCT l.entity_id) FROM audit_logs l JOIN inquiries iq ON iq.id=l.entity_id WHERE iq.owner_id=u.id AND l.action='UPDATE' AND l.created_at>=${weekStart} AND json_extract(l.details,'$.after.status')='QUOTED') quoted,
     (SELECT COUNT(DISTINCT l.entity_id) FROM audit_logs l JOIN inquiries iq ON iq.id=l.entity_id WHERE iq.owner_id=u.id AND l.action='UPDATE' AND l.created_at>=${weekStart} AND json_extract(l.details,'$.after.status')='WON') won
-    FROM users u LEFT JOIN inquiries i ON i.owner_id=u.id WHERE u.role='SALES' AND u.active=1 GROUP BY u.id ORDER BY u.id`):[];
+    FROM users u LEFT JOIN inquiries i ON i.owner_id=u.id WHERE u.role='SALES' AND u.active=1 AND u.assignable=1 GROUP BY u.id ORDER BY u.id`):[];
   const weeklySources=s.role==="LEADER"?rows<WeeklyRow>(`SELECT source label,COUNT(*) inquiries,
     (SELECT COUNT(*) FROM follow_ups f JOIN inquiries fi ON fi.id=f.inquiry_id WHERE fi.source=i.source AND f.created_at>=${weekStart}) followups,
     SUM(CASE WHEN status='QUOTED' THEN 1 ELSE 0 END) quoted,SUM(CASE WHEN status='WON' THEN 1 ELSE 0 END) won
@@ -69,8 +105,14 @@ export default async function Dashboard() {
   return <>
     <div className="topline"><div><div className="title">{s.name}，今天好</div><p className="subtle">查看询盘处理进度和近期任务</p></div>{s.role === "LEADER" && <Link className="btn btn-primary" href="/inquiries/new">＋ 录入询盘</Link>}</div>
     <section className="cards"><div className="card"><span className="subtle">全部询盘</span><div className="value">{stats.total || 0}</div></div>{s.role==="LEADER"?<><div className="card"><span className="subtle">待分配</span><div className="value">{stats.unassigned || 0}</div></div><div className="card"><span className="subtle">待首次跟进</span><div className="value">{stats.fresh || 0}</div></div><div className="card"><span className="subtle">已逾期</span><div className="value">{stats.overdue || 0}</div></div></>:<><div className="card"><span className="subtle">待接受</span><div className="value">{stats.unaccepted || 0}</div></div><div className="card"><span className="subtle">48小时未接受</span><div className="value">{stats.acceptance_overdue || 0}</div></div><div className="card"><span className="subtle">提醒已到期</span><div className="value">{stats.reminder_due || 0}</div></div></>}</section>
-    {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>业务员分配概况</strong><span className="subtle">累计按曾收到的不同询盘统计；数据每15秒自动同步</span></div><table className="table"><thead><tr><th>业务员</th><th>累计已分配</th><th>当前负责</th><th>待首次跟进</th><th>跟进中</th><th>已报价</th><th>已成交</th><th>跟进逾期</th></tr></thead><tbody>{salesSummary.map(x => <tr key={x.id}><td><strong>{x.display_name}</strong></td><td>{x.cumulative || 0}</td><td>{x.total || 0}</td><td>{x.fresh || 0}</td><td>{x.active || 0}</td><td>{x.quoted || 0}</td><td>{x.won || 0}</td><td>{x.overdue || 0}</td></tr>)}</tbody></table></section>}
-    {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>CRM 公海自动同步</strong><span className="subtle">每日任务需在发布服务器配置；每次最多处理 50 条</span></div><p>待同步：{poolSync?.pending || 0} 条 · 已入 CRM 公海：{poolSync?.synced || 0} 条 · 上次失败待重试：{poolSync?.failed || 0} 条</p><p className="subtle">仅处理当前归属公海的询盘；失败保留在待同步中，下一次自动重试。</p></section>}
+    {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>业务员询盘流转与跟进</strong><span className="subtle">累计口径；每15秒自动同步</span></div>
+      <div style={{overflowX:"auto"}}><table className="table"><thead><tr><th>业务员</th><th>累计收到</th><th>当前留存</th><th>已跟进</th><th>未跟进</th><th>转交同事</th><th>其中未接受就转交</th><th>转入公海</th><th>48小时自动退回</th></tr></thead>
+        <tbody>{salesFlow.map(x=><tr key={x.id}><td><strong>{x.display_name}</strong></td><td>{x.received}</td><td><Link href={`/inquiries?owner=${x.id}`}>{x.retained}</Link></td><td>{x.followed}</td><td>{x.unfollowed}</td><td>{x.transferred}</td><td>{x.unaccepted_transfers}</td><td>{x.pool_out}</td><td>{x.auto_returned}</td></tr>)}</tbody>
+      </table></div>
+      <p className="subtle">累计收到按不同询盘去重；已跟进指该业务员曾接受询盘或写过跟进记录，未跟进为收到后从未做过这两项。当前留存按现负责人计算；转交、公海和自动退回按操作次数计算，因此各列不应直接相减。</p>
+    </section>}
+    {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>业务员当前进度</strong><span className="subtle">仅统计当前归属该业务员的询盘</span></div><table className="table"><thead><tr><th>业务员</th><th>当前负责</th><th>待首次跟进</th><th>跟进中</th><th>已报价</th><th>已成交</th><th>跟进逾期</th></tr></thead><tbody>{salesSummary.map(x => <tr key={x.id}><td><strong>{x.display_name}</strong></td><td>{x.total || 0}</td><td>{x.fresh || 0}</td><td>{x.active || 0}</td><td>{x.quoted || 0}</td><td>{x.won || 0}</td><td>{x.overdue || 0}</td></tr>)}</tbody></table></section>}
+    {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>CRM 公海自动同步</strong><span className="subtle">每日任务需在发布服务器配置；每次最多处理 50 条</span></div><p>当前公海：{(poolSync?.pending || 0)+(poolSync?.synced || 0)} 条 · 待同步：{poolSync?.pending || 0} 条 · 已入 CRM 公海：{poolSync?.synced || 0} 条 · 上次失败待重试：{poolSync?.failed || 0} 条</p><p className="subtle">仅处理当前归属公海的询盘；失败保留在待同步中，下一次自动重试。</p></section>}
     {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>本周经营分析</strong><span className="subtle">统计周期：本周一至现在</span></div><div className="cards"><div className="card"><span className="subtle">新增询盘</span><div className="value">{weeklyOverall.new_count}</div></div><div className="card"><span className="subtle">本周分配</span><div className="value">{weeklyOverall.assigned_count}</div></div><div className="card"><span className="subtle">跟进记录</span><div className="value">{weeklyOverall.follow_count}</div></div><div className="card"><span className="subtle">报价 / 成交</span><div className="value">{weeklyOverall.quoted_count} / {weeklyOverall.won_count}</div></div></div><div className="grid2">
       <div><h3>按业务员</h3><table className="table"><thead><tr><th>业务员</th><th>分配</th><th>跟进</th><th>报价</th><th>成交</th></tr></thead><tbody>{weeklySales.map(x=><tr key={x.label}><td>{x.label}</td><td>{x.inquiries||0}</td><td>{x.followups||0}</td><td>{x.quoted||0}</td><td>{x.won||0}</td></tr>)}</tbody></table></div>
       <div><h3>按询盘来源</h3><table className="table"><thead><tr><th>来源</th><th>新增</th><th>跟进</th><th>当前报价</th><th>当前成交</th></tr></thead><tbody>{weeklySources.map(x=><tr key={x.label}><td>{sources[x.label]||x.label}</td><td>{x.inquiries||0}</td><td>{x.followups||0}</td><td>{x.quoted||0}</td><td>{x.won||0}</td></tr>)}</tbody></table></div>
