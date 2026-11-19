@@ -1,10 +1,11 @@
 import { notFound } from "next/navigation";
 import { requireSession } from "@/lib/auth";
 import { row,rows } from "@/lib/db";
-import { products,sources,statuses,salesProgressStatuses } from "@/lib/labels";
-import { acceptInquiry,assignInquiry,syncInquiryToCrm,transferInquiry,updateCustomer,updateInquiry,updateInquiryDetails } from "./actions";
+import { products,sources,statuses } from "@/lib/labels";
+import { assignInquiry,syncInquiryToCrm,transferInquiry,updateCustomer,updateInquiryDetails } from "./actions";
+import { acceptInquiry,markInquiryWon,moveNoReplyToPool,recordCommunication,reopenWonInquiry } from "./communication-actions";
 
-type Inquiry={id:number;inquiry_no:string;customer_id:number;primary_email:string;name:string|null;company:string|null;country:string|null;phone:string|null;alternate_emails:string|null;note:string|null;source:string;product_category:string;requirement:string;status:string;owner_id:number|null;owner_name:string|null;assigned_at:string|null;accepted_at:string|null;accept_method:string|null;next_follow_up_at:string|null;deal_amount:number|null;currency:string;created_at:string};
+type Inquiry={id:number;inquiry_no:string;customer_id:number;primary_email:string;name:string|null;company:string|null;country:string|null;phone:string|null;alternate_emails:string|null;note:string|null;source:string;product_category:string;requirement:string;status:string;owner_id:number|null;owner_name:string|null;assigned_at:string|null;accepted_at:string|null;accept_method:string|null;next_follow_up_at:string|null;reminder_overdue_at:string|null;deal_amount:number|null;currency:string;created_at:string};
 type Follow={id:number;user_name:string;method:string;content:string;customer_reply:string|null;next_follow_up_at:string|null;created_at:string};
 type AuditEntry={id:number;action:string;entity_type:string;summary:string;details:string|null;created_at:string;user_name:string|null};
 const fieldNames:Record<string,string>={primary_email:"客户邮箱",source:"询盘来源",product_category:"产品分类",requirement:"客户需求",status:"当前进度",name:"联系人",company:"公司",country:"国家/地区",phone:"电话",alternate_emails:"关联邮箱",note:"客户备注",next_follow_up_at:"下次提醒"};
@@ -49,6 +50,10 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
     ...follows.map(follow=>({kind:"follow" as const,id:follow.id,created_at:follow.created_at,follow}))
   ].sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id-a.id);
   const crmSync=row<any>("SELECT * FROM crm_syncs WHERE inquiry_id=?",id);
+  const firstEmailConfirmed=Boolean(q.accepted_at&&row<{id:number}>(`SELECT id FROM audit_logs
+    WHERE entity_type='INQUIRY' AND entity_id=? AND action='ACCEPT'
+      AND summary='确认第一次开发邮件已发送，接受询盘'
+      LIMIT 1`,id));
   const isPublicPool=q.status==="NO_REPLY"||q.status==="PUBLIC_POOL";
   return <>
     <div className="topline"><div><div className="title">{q.inquiry_no}</div><p className="subtle">{q.company||q.name||q.primary_email} · {q.product_category}</p></div><span className="badge badge-green">{statuses[q.status]}</span></div>
@@ -57,8 +62,44 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
     {s.role==="LEADER"&&<section className="panel"><div className="toolbar"><strong>询盘分配</strong><span className="subtle">分配前可参考登录、累计数量和最近一次接收记录</span></div><table className="table"><thead><tr><th>业务员</th><th>最后登录时间</th><th>累计分配询盘</th><th>上次收到询盘时间</th><th>上次询盘产品</th></tr></thead><tbody>{staff.map(u=><tr key={u.id}><td><strong>{u.display_name}</strong></td><td>{u.last_login_at?.slice(0,16)||"从未登录"}</td><td>{u.assigned_total||0} 条</td><td>{u.last_assigned_at?.slice(0,16)||"尚未分配"}</td><td>{u.last_product||"—"}</td></tr>)}</tbody></table><form action={assignInquiry} className="actions" style={{marginTop:18}}><input type="hidden" name="id" value={id}/><select name="owner"><option value="PUBLIC_POOL">公海（仅领导可见）</option>{staff.map(u=><option value={u.id} key={u.id}>{u.display_name}（累计 {u.assigned_total||0} 条）{u.last_product?` · 上次 ${u.last_product}`:" · 尚未分配"}</option>)}</select><button className="btn btn-primary">{q.owner_id||isPublicPool?"重新分配":"确认分配"}</button></form></section>}
     {s.role==="SALES"&&<section className="panel"><div className="toolbar"><div><strong>内部转交询盘</strong><p className="subtle">转交后你将无法再查看；原跟进记录保留，接收人需要重新接受询盘</p></div></div><form action={transferInquiry} className="actions"><input type="hidden" name="id" value={id}/><select name="target" required defaultValue=""><option value="" disabled>选择接收业务员</option>{staff.filter(u=>u.id!==s.id).map(u=><option value={u.id} key={u.id}>{u.display_name}</option>)}</select><button className="btn btn-primary" disabled={staff.filter(u=>u.id!==s.id).length===0}>确认转交</button></form></section>}
     <section className="panel"><div className="toolbar"><div><strong>悟空CRM建档</strong><p className="subtle">{isPublicPool?"使用领导CRM账号建档，并自动放入悟空CRM公海":"使用当前负责人的悟空CRM账号创建客户和联系人"}</p></div>{crmSync?.crm_contact_created?<span className="badge badge-green">已同步 · 客户 #{crmSync.crm_customer_id}</span>:<form action={syncInquiryToCrm}><input type="hidden" name="id" value={id}/><button className="btn btn-primary" disabled={!q.owner_id&&!(s.role==="LEADER"&&isPublicPool)}>{isPublicPool?"导入悟空CRM公海":"一键建档到悟空CRM"}</button></form>}</div>{!q.owner_id&&!isPublicPool&&<p className="subtle">请先分配业务员。</p>}{isPublicPool&&<p className="subtle">该询盘当前属于公海，仅领导可执行公海导入或重新分配。</p>}{crmSync?.last_error&&<div className="error">上次同步失败：{crmSync.last_error}</div>}</section>
-    <div className="grid2"><section className="panel"><strong>接受询盘</strong>{q.accepted_at?<div style={{marginTop:18}}><span className="badge badge-green">已接受</span><p>沟通方式：{q.accept_method}</p><p className="subtle">接受时间：{q.accepted_at.slice(0,16)} · 下次提醒已自动设置为3天后</p></div>:s.role==="SALES"?<form action={acceptInquiry}><input type="hidden" name="id" value={id}/><label className="field">沟通方式<select name="method"><option>邮件</option><option>WhatsApp</option><option>邮件 + WhatsApp</option><option>电话</option><option>在线聊天</option><option>视频会议</option><option>其他</option></select></label><p className="subtle">请先通过所选方式联系客户，再点击接受询盘。系统将自动设置3天后的提醒。</p><button className="btn btn-primary" disabled={!q.owner_id}>接受询盘</button></form>:<p className="subtle" style={{marginTop:18}}>等待业务员接受。分配后48小时仍未接受会自动退回待分配。</p>}</section>
-    <section className="panel"><strong>状态与结果</strong><form action={updateInquiry}><input type="hidden" name="id" value={id}/><label className="field">当前进度<select name="status" defaultValue={q.status==="NEW"?"CONTACTING":q.status}>{Object.entries(salesProgressStatuses).map(([v,l])=><option value={v} key={v}>{l}</option>)}</select></label><button className="btn btn-primary" disabled={!q.owner_id||(!q.accepted_at&&s.role==="SALES")}>更新进度</button></form><div className="reminder-rules"><strong>自动提醒规则</strong><p>需求确认：3天后 · 技术沟通：3天后 · 已报价：3天后</p><p>商务谈判：4天后 · 已成交：不再提醒</p><p>多次沟通无回复：立即取消负责人并转入领导公海，不再提醒</p><p className="subtle">业务员须先接受询盘；分配后48小时仍未接受，自动退回待分配并记录日志。</p></div></section></div>
+    <div className="grid2">
+      <section className="panel"><strong>接受询盘 / 第一次沟通</strong>
+        {q.accepted_at?<div style={{marginTop:18}}><span className="badge badge-green">{firstEmailConfirmed?"第一次邮件已确认发送":"已接受（历史记录）"}</span>
+          <p>接受时间：{q.accepted_at.slice(0,16)}</p>
+        </div>:s.role==="SALES"?<form action={acceptInquiry}>
+          <input type="hidden" name="id" value={id}/>
+          <p className="subtle">请先发送第一封开发邮件，再点击确认。确认后第 3 天提醒第二次沟通，第 5 天算逾期。</p>
+          <button className="btn btn-primary" disabled={!q.owner_id}>确认第一封邮件已发送并接受询盘</button>
+        </form>:<p className="subtle" style={{marginTop:18}}>等待业务员确认第一封邮件已发送。分配后 48 小时仍未确认会自动退回待分配。</p>}
+      </section>
+      <section className="panel"><strong>沟通进度与结果</strong>
+        <p>当前阶段：<strong>{statuses[q.status]||q.status}</strong></p>
+        {q.next_follow_up_at&&<p>提醒时间：{q.next_follow_up_at.slice(0,16)}{q.reminder_overdue_at&&` · 逾期时间：${q.reminder_overdue_at.slice(0,16)}`}</p>}
+        {s.role==="SALES"&&q.accepted_at&&["CONTACTING","SECOND_CONTACT","THIRD_CONTACT","ONGOING"].includes(q.status)&&<form action={recordCommunication}>
+          <input type="hidden" name="id" value={id}/>
+          <label className="field">本次沟通方式<select name="method"><option>邮件</option><option>WhatsApp</option><option>邮件 + WhatsApp</option><option>电话</option><option>在线聊天</option><option>视频会议</option><option>其他</option></select></label>
+          <label className="field">沟通说明（可选）<textarea name="note" maxLength={2000} placeholder="例如：已发送第二封邮件，等待客户回复"/></label>
+          <button className="btn btn-primary">{q.status==="CONTACTING"?"确认第二次沟通":q.status==="SECOND_CONTACT"?"确认第三次沟通":"记录本次持续沟通"}</button>
+        </form>}
+        {s.role==="SALES"&&["THIRD_CONTACT","ONGOING"].includes(q.status)&&<form action={moveNoReplyToPool} style={{marginTop:18}}>
+          <input type="hidden" name="id" value={id}/>
+          <label><input type="checkbox" name="confirmed" value="yes" required/> 确认三次沟通后客户仍未回复</label>
+          <div style={{marginTop:10}}><button className="btn btn-danger">三次沟通无回复，转入公海</button></div>
+        </form>}
+        {q.accepted_at&&q.owner_id&&q.status!=="WON"&&q.status!=="LOST"&&<form action={markInquiryWon} style={{marginTop:18}}>
+          <input type="hidden" name="id" value={id}/>
+          <label className="field">成交金额 USD（可选）<input name="amount" type="number" min={0} step="0.01"/></label>
+          <button className="btn">标记已成交</button>
+        </form>}
+        {s.role==="LEADER"&&q.status==="WON"&&<form action={reopenWonInquiry}><input type="hidden" name="id" value={id}/><button className="btn">撤销已成交，恢复跟进</button></form>}
+        <div className="reminder-rules"><strong>自动提醒规则</strong>
+          <p>接受询盘即确认第一封开发邮件已发送；分配后 48 小时未接受，自动退回待分配。</p>
+          <p>第一次、第二次沟通后：第 3 天提醒下一次，第 5 天起算逾期。</p>
+          <p>第三次沟通后：可手动确认无回复并转公海；不转公海则每次沟通后第 5 天提醒，逾期持续显示至再次沟通。</p>
+          <p>已成交：停止提醒。</p>
+        </div>
+      </section>
+    </div>
     <section className="panel"><strong>客户资料</strong><form action={updateCustomer}><input type="hidden" name="inquiryId" value={id}/><div className="grid2"><label className="field">联系人<input name="name" defaultValue={q.name||""}/></label><label className="field">公司<input name="company" defaultValue={q.company||""}/></label><label className="field">国家/地区<input name="country" defaultValue={q.country||""}/></label><label className="field">电话 / WhatsApp<input name="phone" defaultValue={q.phone||""}/></label><label className="field">关联邮箱<input name="alternate_emails" defaultValue={q.alternate_emails||""} placeholder="个人邮箱、公司其他邮箱；多个用逗号分隔"/></label></div><label className="field">客户备注<textarea name="note" defaultValue={q.note||""}/></label><button className="btn">保存客户资料</button></form></section>
     <section className="panel"><strong>询盘处理时间线</strong><p className="subtle">按时间展示这条询盘的分配、接受、转交、进度、客户资料、CRM 同步和历史跟进记录。</p>
       <div className="timeline" style={{marginTop:20}}>

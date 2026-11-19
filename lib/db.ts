@@ -48,6 +48,7 @@ db.exec(`
     owner_id INTEGER REFERENCES users(id),
     assigned_at TEXT,
     next_follow_up_at TEXT,
+    reminder_overdue_at TEXT,
     deal_amount REAL,
     currency TEXT DEFAULT 'USD',
     created_by INTEGER NOT NULL REFERENCES users(id),
@@ -63,6 +64,14 @@ db.exec(`
     customer_reply TEXT,
     next_follow_up_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+  CREATE TABLE IF NOT EXISTS inquiry_user_flags (
+    inquiry_id INTEGER NOT NULL REFERENCES inquiries(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1)),
+    important INTEGER NOT NULL DEFAULT 0 CHECK(important IN (0,1)),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY(inquiry_id,user_id)
   );
   CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -125,6 +134,7 @@ function ensureInquiryColumn(sql: string) {
   catch (error) { if (!String(error).includes("duplicate column name")) throw error; }
 }
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accepted_at TEXT");
+ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN reminder_overdue_at TEXT");
 ensureInquiryColumn("ALTER TABLE inquiries ADD COLUMN accept_method TEXT");
 ensureInquiryColumn("ALTER TABLE users ADD COLUMN last_login_at TEXT");
 ensureInquiryColumn("ALTER TABLE users ADD COLUMN assignable INTEGER NOT NULL DEFAULT 1");
@@ -165,6 +175,37 @@ try {
         AND al.entity_id=crm_syncs.inquiry_id AND al.action='CRM_SYNC'
         AND al.summary LIKE '同步到悟空CRM公海%'
     )`);
+  }
+  const communicationMigration = db.prepare("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES('communication_flow_v1','complete',datetime('now','localtime'))").run();
+  if (communicationMigration.changes > 0) {
+    db.exec(`
+      UPDATE inquiries SET status='ONGOING'
+        WHERE status IN ('CONTACTING','TECHNICAL','QUOTED','NEGOTIATING','WAITING','PAUSED')
+          AND owner_id IS NOT NULL AND accepted_at IS NOT NULL;
+      UPDATE inquiries SET status='NEW',next_follow_up_at=NULL
+        WHERE status IN ('CONTACTING','TECHNICAL','QUOTED','NEGOTIATING','WAITING','PAUSED')
+          AND owner_id IS NOT NULL AND accepted_at IS NULL;
+      UPDATE inquiries SET reminder_overdue_at=next_follow_up_at
+        WHERE owner_id IS NOT NULL AND accepted_at IS NOT NULL
+          AND status='ONGOING' AND next_follow_up_at IS NOT NULL;
+    `);
+  }
+  const oldContactMigration = db.prepare("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES('communication_old_contact_v2','complete',datetime('now','localtime'))").run();
+  if (oldContactMigration.changes > 0) {
+    db.exec(`UPDATE inquiries SET status='ONGOING',reminder_overdue_at=next_follow_up_at
+      WHERE status='CONTACTING' AND accepted_at IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM audit_logs al WHERE al.entity_type='INQUIRY'
+            AND al.entity_id=inquiries.id AND al.action='ACCEPT'
+            AND al.summary='确认第一次开发邮件已发送，接受询盘'
+        )`);
+  }
+  const missingReminderMigration = db.prepare("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES('communication_missing_reminder_v3','complete',datetime('now','localtime'))").run();
+  if (missingReminderMigration.changes > 0) {
+    db.exec(`UPDATE inquiries SET next_follow_up_at=datetime('now','localtime','+5 days'),
+      reminder_overdue_at=datetime('now','localtime','+5 days')
+      WHERE status='ONGOING' AND owner_id IS NOT NULL AND accepted_at IS NOT NULL
+        AND next_follow_up_at IS NULL`);
   }
   db.exec("COMMIT");
 } catch (error) {

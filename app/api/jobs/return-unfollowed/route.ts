@@ -29,7 +29,7 @@ export async function POST(request: Request) {
     let returned = 0;
     for (const item of candidates) {
       const result = db.prepare(`UPDATE inquiries SET owner_id=NULL,status='UNASSIGNED',assigned_at=NULL,
-        accepted_at=NULL,accept_method=NULL,next_follow_up_at=NULL,updated_at=datetime('now','localtime')
+        accepted_at=NULL,accept_method=NULL,next_follow_up_at=NULL,reminder_overdue_at=NULL,updated_at=datetime('now','localtime')
         WHERE id=? AND owner_id=? AND assigned_at=?`).run(item.id,item.owner_id,item.assigned_at);
       if (result.changes) {
         audit(item.owner_id,"AUTO_RETURN","INQUIRY",item.id,`分配后48小时未接受，自动退回待分配：${item.inquiry_no}`,
