@@ -5,6 +5,29 @@ import { products,sources,statuses,salesProgressStatuses } from "@/lib/labels";
 import { acceptInquiry,assignInquiry,syncInquiryToCrm,transferInquiry,updateCustomer,updateInquiry,updateInquiryDetails } from "./actions";
 
 type Inquiry={id:number;inquiry_no:string;customer_id:number;primary_email:string;name:string|null;company:string|null;country:string|null;phone:string|null;alternate_emails:string|null;note:string|null;source:string;product_category:string;requirement:string;status:string;owner_id:number|null;owner_name:string|null;assigned_at:string|null;accepted_at:string|null;accept_method:string|null;next_follow_up_at:string|null;deal_amount:number|null;currency:string;created_at:string};
+type Follow={id:number;user_name:string;method:string;content:string;customer_reply:string|null;next_follow_up_at:string|null;created_at:string};
+type AuditEntry={id:number;action:string;entity_type:string;summary:string;details:string|null;created_at:string;user_name:string|null};
+const fieldNames:Record<string,string>={primary_email:"客户邮箱",source:"询盘来源",product_category:"产品分类",requirement:"客户需求",status:"当前进度",name:"联系人",company:"公司",country:"国家/地区",phone:"电话",alternate_emails:"关联邮箱",note:"客户备注",next_follow_up_at:"下次提醒"};
+function changesFor(log:AuditEntry){
+  if(!log.details)return [];
+  try{
+    const detail=JSON.parse(log.details);
+    if(!detail?.before||!detail?.after)return [];
+    return Object.entries(detail.after as Record<string,unknown>)
+      .filter(([key,value])=>key in fieldNames&&detail.before[key]!==value)
+      .map(([key,value])=>{
+        const display=(raw:unknown)=>key==="status"?statuses[String(raw)]||String(raw??"—"):key==="source"?sources[String(raw)]||String(raw??"—"):String(raw??"—");
+        return {label:fieldNames[key],before:display(detail.before[key]),after:display(value)};
+      });
+  }catch{return []}
+}
+function logSummary(log:AuditEntry){
+  if(log.action==="UPDATE"&&log.entity_type==="INQUIRY"){
+    const statusChange=changesFor(log).find(change=>change.label==="当前进度");
+    if(statusChange)return `更新询盘进度：${statusChange.before} → ${statusChange.after}`;
+  }
+  return log.entity_type==="CUSTOMER"?`客户资料：${log.summary}`:log.summary;
+}
 
 export default async function Detail({params}:{params:Promise<{id:string}>}){
   const s=await requireSession(),id=Number((await params).id);
@@ -15,7 +38,16 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
     (SELECT i.assigned_at FROM inquiries i WHERE i.owner_id=u.id AND i.assigned_at IS NOT NULL ORDER BY i.assigned_at DESC LIMIT 1) last_assigned_at,
     (SELECT i.product_category FROM inquiries i WHERE i.owner_id=u.id AND i.assigned_at IS NOT NULL ORDER BY i.assigned_at DESC LIMIT 1) last_product
     FROM users u WHERE u.role='SALES' AND u.active=1 AND u.assignable=1 ORDER BY u.id`);
-  const follows=rows<any>("SELECT f.*,u.display_name user_name FROM follow_ups f JOIN users u ON u.id=f.user_id WHERE inquiry_id=? ORDER BY f.created_at DESC",id);
+  const follows=rows<Follow>("SELECT f.*,u.display_name user_name FROM follow_ups f JOIN users u ON u.id=f.user_id WHERE inquiry_id=? ORDER BY f.created_at DESC,f.id DESC",id);
+  const logs=rows<AuditEntry>(`SELECT l.id,l.action,l.entity_type,l.summary,l.details,l.created_at,u.display_name user_name
+    FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id
+    WHERE (l.entity_type='INQUIRY' AND l.entity_id=? AND l.action<>'FOLLOW_UP')
+      OR (l.entity_type='CUSTOMER' AND l.entity_id=? AND l.action='UPDATE')
+    ORDER BY l.created_at DESC,l.id DESC`,id,q.customer_id);
+  const timeline=[
+    ...logs.map(log=>({kind:"log" as const,id:log.id,created_at:log.created_at,log})),
+    ...follows.map(follow=>({kind:"follow" as const,id:follow.id,created_at:follow.created_at,follow}))
+  ].sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id-a.id);
   const crmSync=row<any>("SELECT * FROM crm_syncs WHERE inquiry_id=?",id);
   const isPublicPool=q.status==="NO_REPLY"||q.status==="PUBLIC_POOL";
   return <>
@@ -28,6 +60,22 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
     <div className="grid2"><section className="panel"><strong>接受询盘</strong>{q.accepted_at?<div style={{marginTop:18}}><span className="badge badge-green">已接受</span><p>沟通方式：{q.accept_method}</p><p className="subtle">接受时间：{q.accepted_at.slice(0,16)} · 下次提醒已自动设置为3天后</p></div>:s.role==="SALES"?<form action={acceptInquiry}><input type="hidden" name="id" value={id}/><label className="field">沟通方式<select name="method"><option>邮件</option><option>WhatsApp</option><option>邮件 + WhatsApp</option><option>电话</option><option>在线聊天</option><option>视频会议</option><option>其他</option></select></label><p className="subtle">请先通过所选方式联系客户，再点击接受询盘。系统将自动设置3天后的提醒。</p><button className="btn btn-primary" disabled={!q.owner_id}>接受询盘</button></form>:<p className="subtle" style={{marginTop:18}}>等待业务员接受。分配后48小时仍未接受会自动退回待分配。</p>}</section>
     <section className="panel"><strong>状态与结果</strong><form action={updateInquiry}><input type="hidden" name="id" value={id}/><label className="field">当前进度<select name="status" defaultValue={q.status==="NEW"?"CONTACTING":q.status}>{Object.entries(salesProgressStatuses).map(([v,l])=><option value={v} key={v}>{l}</option>)}</select></label><button className="btn btn-primary" disabled={!q.owner_id||(!q.accepted_at&&s.role==="SALES")}>更新进度</button></form><div className="reminder-rules"><strong>自动提醒规则</strong><p>需求确认：3天后 · 技术沟通：3天后 · 已报价：3天后</p><p>商务谈判：4天后 · 已成交：不再提醒</p><p>多次沟通无回复：立即取消负责人并转入领导公海，不再提醒</p><p className="subtle">业务员须先接受询盘；分配后48小时仍未接受，自动退回待分配并记录日志。</p></div></section></div>
     <section className="panel"><strong>客户资料</strong><form action={updateCustomer}><input type="hidden" name="inquiryId" value={id}/><div className="grid2"><label className="field">联系人<input name="name" defaultValue={q.name||""}/></label><label className="field">公司<input name="company" defaultValue={q.company||""}/></label><label className="field">国家/地区<input name="country" defaultValue={q.country||""}/></label><label className="field">电话 / WhatsApp<input name="phone" defaultValue={q.phone||""}/></label><label className="field">关联邮箱<input name="alternate_emails" defaultValue={q.alternate_emails||""} placeholder="个人邮箱、公司其他邮箱；多个用逗号分隔"/></label></div><label className="field">客户备注<textarea name="note" defaultValue={q.note||""}/></label><button className="btn">保存客户资料</button></form></section>
-    <section className="panel"><strong>跟进时间线</strong><div className="timeline" style={{marginTop:20}}>{follows.map(f=><div className="event" key={f.id}><strong>{f.user_name} · {f.method}</strong><p>{f.content}</p>{f.customer_reply&&<p className="subtle">客户回复：{f.customer_reply}</p>}<small>{f.created_at}{f.next_follow_up_at&&` · 下次跟进 ${f.next_follow_up_at}`}</small></div>)}{follows.length===0&&<p className="subtle">还没有跟进记录。</p>}</div></section>
+    <section className="panel"><strong>询盘处理时间线</strong><p className="subtle">按时间展示这条询盘的分配、接受、转交、进度、客户资料、CRM 同步和历史跟进记录。</p>
+      <div className="timeline" style={{marginTop:20}}>
+        {timeline.map(event=>event.kind==="follow"?<div className="event" key={`follow-${event.id}`}>
+          <strong>{event.follow.user_name} · 跟进记录 · {event.follow.method}</strong>
+          <p style={{whiteSpace:"pre-wrap"}}>{event.follow.content}</p>
+          {event.follow.customer_reply&&<p className="subtle">客户回复：{event.follow.customer_reply}</p>}
+          <small>{event.created_at}{event.follow.next_follow_up_at&&` · 下次跟进 ${event.follow.next_follow_up_at}`}</small>
+        </div>:<div className="event" key={`log-${event.id}`}>
+          <strong>{event.log.action.startsWith("AUTO_")||event.log.action==="CRM_POOL_SYNC"?"系统自动任务":event.log.user_name||"系统"} · {logSummary(event.log)}</strong>
+          {changesFor(event.log).length>0&&<details style={{marginTop:6}}><summary>查看变更内容</summary>
+            <ul>{changesFor(event.log).map(change=><li key={change.label}>{change.label}：{change.before} → {change.after}</li>)}</ul>
+          </details>}
+          <small>{event.created_at}</small>
+        </div>)}
+        {timeline.length===0&&<p className="subtle">暂无处理记录。</p>}
+      </div>
+    </section>
   </>
 }

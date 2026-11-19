@@ -117,6 +117,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_inquiry_owner ON inquiries(owner_id);
   CREATE INDEX IF NOT EXISTS idx_inquiry_customer ON inquiries(customer_id);
   CREATE INDEX IF NOT EXISTS idx_follow_inquiry ON follow_ups(inquiry_id);
+  CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type,entity_id,id);
 `);
 
 function ensureInquiryColumn(sql: string) {
