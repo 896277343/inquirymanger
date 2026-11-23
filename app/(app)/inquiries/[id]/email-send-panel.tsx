@@ -19,11 +19,12 @@ export function EmailSendPanel({ id, stage, fromEmail, toEmail, templates, conte
   const [message, setMessage] = useState("");
   const [pending, startTransition] = useTransition();
   const template = templates.find(item => item.id === templateId);
-  const locked = Boolean(attempt && attempt.status !== "FAILED");
+  const locked = Boolean(attempt && (stage === 4 ? ["SENDING","UNKNOWN","PARTIAL"].includes(attempt.status) : attempt.status !== "FAILED"));
 
   return <section className="panel">
-    <div className="toolbar"><strong>一键发送{stage === 1 ? "第一次开发信" : `第${stage === 2 ? "二" : "三"}次沟通邮件`}</strong><Link href="/settings/email">我的开发信设置</Link></div>
+    <div className="toolbar"><strong>一键发送{stage === 1 ? "第一次开发信" : stage === 4 ? "持续沟通邮件" : `第${stage === 2 ? "二" : "三"}次沟通邮件`}</strong><Link href="/settings/email">我的开发信设置</Link></div>
     {stage === 1 && <p className="subtle">历史询盘可能已通过企业邮箱手工发送首封邮件；发送前请核对“已发送”，避免重复联系客户。</p>}
+    {stage === 4 && <p className="subtle">可选择任一已有模板继续沟通；每次成功发送都会写入跟进记录，并在第 5 天提醒。连续两次发信至少间隔 1 分钟。</p>}
     {attempt && <div className={attempt.status === "ACCEPTED" ? "subtle" : "error"}>
       发信记录：{({ SENDING: "发送处理中，请勿重复发送", UNKNOWN: "发送结果不确定，请先核查企业邮箱已发送记录并联系领导", PARTIAL: "部分地址被接收，请联系领导核查", ACCEPTED: "客户邮件已由邮箱服务器接收", FAILED: "发送失败，修正后可重试" } as Record<string, string>)[attempt.status] || attempt.status}
       {attempt.error_message && <p>{attempt.error_message}</p>}

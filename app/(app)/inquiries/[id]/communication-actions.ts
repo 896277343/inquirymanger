@@ -56,6 +56,9 @@ export async function recordCommunication(formData: FormData) {
     if (row("SELECT 1 FROM email_send_events WHERE inquiry_id=? AND status IN ('SENDING','UNKNOWN','PARTIAL') LIMIT 1", id)) {
       throw new Error("开发信发送结果待核查，请先确认后再更新沟通阶段");
     }
+    if (row("SELECT 1 FROM email_repeat_events WHERE inquiry_id=? AND status IN ('SENDING','UNKNOWN','PARTIAL') LIMIT 1", id)) {
+      throw new Error("沟通邮件发送结果待核查，请先确认后再更新沟通阶段");
+    }
     const transition: Record<string, { status: string; label: string; days: number }> = {
       CONTACTING: { status: "SECOND_CONTACT", label: "第二次沟通", days: 3 },
       SECOND_CONTACT: { status: "THIRD_CONTACT", label: "第三次沟通", days: 5 },

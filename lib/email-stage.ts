@@ -10,9 +10,10 @@ export function nextEmailStage(inquiryId: number, status: string, acceptedAt: st
   if (status === "ACCEPTED") return 1;
   if (status === "CONTACTING") return firstEmailSent(inquiryId) ? 2 : 1;
   if (status === "SECOND_CONTACT") return 3;
+  if (status === "THIRD_CONTACT" || status === "ONGOING") return 4;
   return null;
 }
 
 export const emailStageName: Record<number, string> = {
-  1: "第一次开发信", 2: "第二次沟通邮件", 3: "第三次沟通邮件"
+  1: "第一次开发信", 2: "第二次沟通邮件", 3: "第三次沟通邮件", 4: "持续沟通邮件"
 };

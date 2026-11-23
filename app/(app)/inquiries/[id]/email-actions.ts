@@ -20,11 +20,12 @@ function completeEmailStage(id: number, userId: number, stage: number, messageId
   const current = row<{ status: string }>("SELECT status FROM inquiries WHERE id=? AND owner_id=?", id, userId);
   const before = current?.status || "";
   if (stage === 1 ? !["ACCEPTED", "CONTACTING"].includes(before) :
+    stage === 4 ? !["THIRD_CONTACT", "ONGOING"].includes(before) :
     before !== (stage === 2 ? "CONTACTING" : "SECOND_CONTACT")) {
     throw new Error("邮件已发送，但询盘阶段发生变化，请领导核查");
   }
-  const after = stage === 1 ? "CONTACTING" : stage === 2 ? "SECOND_CONTACT" : "THIRD_CONTACT";
-  const days = stage === 3 ? 5 : 3;
+  const after = stage === 1 ? "CONTACTING" : stage === 2 ? "SECOND_CONTACT" : stage === 3 ? "THIRD_CONTACT" : "ONGOING";
+  const days = stage >= 3 ? 5 : 3;
   const changed = db.prepare(`UPDATE inquiries SET status=?,accept_method='邮件',
     next_follow_up_at=datetime('now','localtime',?),
     reminder_overdue_at=datetime('now','localtime','+5 days'),updated_at=datetime('now','localtime')
@@ -66,6 +67,7 @@ export async function sendDevelopmentEmail(formData: FormData) {
   let ccRecipients: string[] = [];
   let templateName = "";
   let stage = 0;
+  let repeatId = 0;
   let reserved = false;
   try {
     db.exec("BEGIN IMMEDIATE");
@@ -84,7 +86,9 @@ export async function sendDevelopmentEmail(formData: FormData) {
     ccRecipients = [...new Set([DEVELOPMENT_CC, fromEmail].map(address => address.toLowerCase()))];
     password = decryptSecret(account.password_encrypted);
     const template = row<{ name: string; subject: string; body: string; body_html: string | null }>(
-      "SELECT name,subject,body,body_html FROM email_templates WHERE id=? AND user_id=? AND stage=?", templateId, session.id, stage);
+      stage === 4 ? "SELECT name,subject,body,body_html FROM email_templates WHERE id=? AND user_id=?" :
+        "SELECT name,subject,body,body_html FROM email_templates WHERE id=? AND user_id=? AND stage=?",
+      ...(stage === 4 ? [templateId, session.id] : [templateId, session.id, stage]));
     if (!template) throw new Error("模板不存在或不属于你");
     templateName = template.name;
     const context = mailContext({
@@ -96,11 +100,20 @@ export async function sendDevelopmentEmail(formData: FormData) {
     body = renderMailText(template.body, context).trim();
     bodyHtml = cleanMailHtml(renderMailHtml(cleanMailHtml(template.body_html || plainTextToHtml(template.body)), context));
     if (!subject || !body || !bodyHtml || subject.length > 500 || body.length > 30000 || bodyHtml.length > 60000) throw new Error("模板替换后的邮件内容无效");
-    const previous = row<Attempt>("SELECT status FROM email_send_events WHERE inquiry_id=? AND stage=?", id, stage);
-    if (previous && previous.status !== "FAILED") {
+    const previous = stage === 4 ? row<Attempt>("SELECT status FROM email_repeat_events WHERE inquiry_id=? AND status IN ('SENDING','UNKNOWN','PARTIAL') LIMIT 1", id) :
+      row<Attempt>("SELECT status FROM email_send_events WHERE inquiry_id=? AND stage=?", id, stage);
+    if (previous && (stage === 4 || previous.status !== "FAILED")) {
       throw new Error("该询盘已有发送记录，请先核查状态，系统不会重复发送");
     }
-    if (previous) {
+    if (stage === 4) {
+      if (row("SELECT 1 FROM email_repeat_events WHERE inquiry_id=? AND status='ACCEPTED' AND completed_at>datetime('now','localtime','-1 minute') LIMIT 1", id)) {
+        throw new Error("该客户刚刚发送过沟通邮件，请稍后再发，避免重复");
+      }
+      repeatId = Number(db.prepare(`INSERT INTO email_repeat_events
+        (inquiry_id,user_id,template_id,from_email,to_email,cc_email,subject,body,body_html,status)
+        VALUES(?,?,?,?,?,?,?,?,?,'SENDING')`)
+        .run(id,session.id,templateId,fromEmail,toEmail,ccRecipients.join(", "),subject,body,bodyHtml).lastInsertRowid);
+    } else if (previous) {
       db.prepare(`UPDATE email_send_events SET user_id=?,template_id=?,from_email=?,to_email=?,cc_email=?,
         subject=?,body=?,body_html=?,status='SENDING',message_id=NULL,smtp_response=NULL,error_message=NULL,
         started_at=datetime('now','localtime'),completed_at=NULL WHERE inquiry_id=? AND stage=?`)
@@ -137,15 +150,16 @@ export async function sendDevelopmentEmail(formData: FormData) {
     const status = customerAccepted ? "ACCEPTED" : "PARTIAL";
     db.exec("BEGIN IMMEDIATE");
     try {
-      db.prepare(`UPDATE email_send_events SET status=?,message_id=?,smtp_response=?,
-        error_message=?,completed_at=datetime('now','localtime') WHERE inquiry_id=? AND stage=?`)
+      db.prepare(`UPDATE ${stage === 4 ? "email_repeat_events" : "email_send_events"} SET status=?,message_id=?,smtp_response=?,
+        error_message=?,completed_at=datetime('now','localtime') WHERE ${stage === 4 ? "id=?" : "inquiry_id=? AND stage=?"}`)
         .run(status, info.messageId, info.response.slice(0, 500),
           !customerAccepted ? "客户邮箱未被 SMTP 服务器接受，请核查" :
-            missingCc.length ? `抄送未被 SMTP 服务器接受：${missingCc.join("、")}` : null, id, stage);
+            missingCc.length ? `抄送未被 SMTP 服务器接受：${missingCc.join("、")}` : null,
+          ...(stage === 4 ? [repeatId] : [id, stage]));
       audit(session.id, customerAccepted && ccAccepted ? "EMAIL_SENT" : "EMAIL_PARTIAL", "INQUIRY", id,
         customerAccepted && ccAccepted ? `${emailStageName[stage]}已提交邮箱服务器：${toEmail}，抄送 ${ccRecipients.join("、")}` :
           `${emailStageName[stage]}部分接收：客户 ${customerAccepted ? "已接收" : "未接收"}，抄送 ${ccAccepted ? "已接收" : "未接收"}`,
-        { stage, messageId: info.messageId, templateId, accepted: info.accepted, rejected: info.rejected });
+        { stage, repeatId: stage === 4 ? repeatId : null, messageId: info.messageId, templateId, accepted: info.accepted, rejected: info.rejected });
       if (customerAccepted) {
         completeEmailStage(id, session.id, stage, info.messageId, subject, session.id);
       }
@@ -164,12 +178,12 @@ export async function sendDevelopmentEmail(formData: FormData) {
     const message = error instanceof Error ? error.message.slice(0, 300) : "SMTP 发送失败";
     try {
       db.exec("BEGIN IMMEDIATE");
-      db.prepare(`UPDATE email_send_events SET status=?,error_message=?,
-        completed_at=datetime('now','localtime') WHERE inquiry_id=? AND stage=? AND status='SENDING'`)
-        .run(status, message, id, stage);
+      db.prepare(`UPDATE ${stage === 4 ? "email_repeat_events" : "email_send_events"} SET status=?,error_message=?,
+        completed_at=datetime('now','localtime') WHERE ${stage === 4 ? "id=?" : "inquiry_id=? AND stage=?"} AND status='SENDING'`)
+        .run(status, message, ...(stage === 4 ? [repeatId] : [id, stage]));
       audit(session.id, status === "FAILED" ? "EMAIL_SEND_FAILED" : "EMAIL_SEND_UNKNOWN",
         "INQUIRY", id, status === "FAILED" ? "开发信发送失败，未被邮件服务器接受" :
-          "开发信发送结果不确定，禁止自动重试", { stage, code: (error as { code?: string }).code || null });
+          "开发信发送结果不确定，禁止自动重试", { stage, repeatId: stage === 4 ? repeatId : null, code: (error as { code?: string }).code || null });
       db.exec("COMMIT");
     } catch {
       try { db.exec("ROLLBACK"); } catch {}
@@ -187,15 +201,20 @@ export async function resolveEmailSendAttempt(formData: FormData) {
   const leader = await requireLeader();
   const id = Number(formData.get("id"));
   const stage = Number(formData.get("stage"));
+  const repeatId = Number(formData.get("repeatId"));
   const resolution = String(formData.get("resolution"));
   const note = String(formData.get("note") || "").trim();
-  if (!Number.isSafeInteger(id) || id <= 0 || ![1,2,3].includes(stage) || !["sent", "not_sent"].includes(resolution) || note.length < 5) {
+  if (!Number.isSafeInteger(id) || id <= 0 || ![1,2,3,4].includes(stage) ||
+      (stage === 4 && (!Number.isSafeInteger(repeatId) || repeatId <= 0)) ||
+      !["sent", "not_sent"].includes(resolution) || note.length < 5) {
     throw new Error("请选择核查结果，并填写至少 5 字说明");
   }
   db.exec("BEGIN IMMEDIATE");
   try {
     const attempt = row<{ status: string; user_id: number; to_email: string; started_at: string; message_id: string | null; subject: string }>(
-      "SELECT status,user_id,to_email,started_at,message_id,subject FROM email_send_events WHERE inquiry_id=? AND stage=?", id, stage);
+      stage === 4 ? "SELECT status,user_id,to_email,started_at,message_id,subject FROM email_repeat_events WHERE inquiry_id=? AND id=?" :
+        "SELECT status,user_id,to_email,started_at,message_id,subject FROM email_send_events WHERE inquiry_id=? AND stage=?",
+      id, stage === 4 ? repeatId : stage);
     if (!attempt || !["SENDING", "UNKNOWN", "PARTIAL"].includes(attempt.status)) {
       throw new Error("该记录不需要人工核查");
     }
@@ -204,14 +223,15 @@ export async function resolveEmailSendAttempt(formData: FormData) {
       throw new Error("邮件发送可能仍在进行，请稍后再核查");
     }
     const status = resolution === "sent" ? "ACCEPTED" : "FAILED";
-    db.prepare(`UPDATE email_send_events SET status=?,error_message=?,
-      completed_at=datetime('now','localtime') WHERE inquiry_id=? AND stage=?`).run(status, `领导核查：${note}`, id, stage);
+    db.prepare(`UPDATE ${stage === 4 ? "email_repeat_events" : "email_send_events"} SET status=?,error_message=?,
+      completed_at=datetime('now','localtime') WHERE inquiry_id=? AND ${stage === 4 ? "id=?" : "stage=?"}`)
+      .run(status, `领导核查：${note}`, id, stage === 4 ? repeatId : stage);
     if (resolution === "sent") {
       completeEmailStage(id, attempt.user_id, stage, attempt.message_id, attempt.subject, leader.id);
     }
     audit(leader.id, "EMAIL_SEND_REVIEW", "INQUIRY", id,
       `领导核查开发信：${resolution === "sent" ? "客户邮件已发送" : "确认未发送，可重新尝试"}`,
-      { stage, previousStatus: attempt.status, toEmail: attempt.to_email, note });
+      { stage, repeatId: stage === 4 ? repeatId : null, previousStatus: attempt.status, toEmail: attempt.to_email, note });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
