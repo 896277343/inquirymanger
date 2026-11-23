@@ -25,6 +25,8 @@ export async function acceptInquiry(formData: FormData) {
     if (!inquiry || inquiry.owner_id !== session.id || inquiry.status !== "NEW" || inquiry.accepted_at) {
       throw new Error("该询盘已接受或不归你负责");
     }
+    const attempt = row<{ status: string }>("SELECT status FROM email_send_attempts WHERE inquiry_id=?", id);
+    if (attempt && ["SENDING", "UNKNOWN", "PARTIAL"].includes(attempt.status)) throw new Error("该询盘有待核查的开发信发送记录，请先核查发信结果");
     db.prepare(`UPDATE inquiries SET accepted_at=datetime('now','localtime'),accept_method='邮件',
       status='CONTACTING',next_follow_up_at=datetime('now','localtime','+3 days'),
       reminder_overdue_at=datetime('now','localtime','+5 days'),

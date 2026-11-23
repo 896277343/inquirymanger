@@ -73,6 +73,46 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     PRIMARY KEY(inquiry_id,user_id)
   );
+  CREATE TABLE IF NOT EXISTS smtp_accounts (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id),
+    email TEXT NOT NULL,
+    password_encrypted TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+  CREATE TABLE IF NOT EXISTS email_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    name TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_email_templates_user ON email_templates(user_id,id);
+  CREATE TABLE IF NOT EXISTS email_send_attempts (
+    inquiry_id INTEGER PRIMARY KEY REFERENCES inquiries(id),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    template_id INTEGER REFERENCES email_templates(id) ON DELETE SET NULL,
+    from_email TEXT NOT NULL,
+    to_email TEXT NOT NULL,
+    cc_email TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('SENDING','ACCEPTED','PARTIAL','FAILED','UNKNOWN')),
+    message_id TEXT,
+    smtp_response TEXT,
+    error_message TEXT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    completed_at TEXT
+  );
+  CREATE TRIGGER IF NOT EXISTS lock_inquiry_during_email_send
+  BEFORE UPDATE OF owner_id ON inquiries
+  WHEN OLD.owner_id IS NOT NEW.owner_id
+    AND EXISTS (SELECT 1 FROM email_send_attempts e WHERE e.inquiry_id=OLD.id
+      AND e.status IN ('SENDING','UNKNOWN','PARTIAL'))
+  BEGIN
+    SELECT RAISE(ABORT, '开发信发送结果待核查，暂不能转交或重新分配');
+  END;
   CREATE TABLE IF NOT EXISTS audit_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id),

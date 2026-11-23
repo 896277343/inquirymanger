@@ -8,7 +8,8 @@ type Candidate = { id:number; inquiry_no:string; owner_id:number; assigned_at:st
 const dueWhere = `i.owner_id IS NOT NULL AND i.assigned_at IS NOT NULL
   AND i.assigned_at <= datetime('now','localtime','-48 hours')
   AND i.status NOT IN ('WON','LOST')
-  AND i.accepted_at IS NULL`;
+  AND i.accepted_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM email_send_attempts e WHERE e.inquiry_id=i.id AND e.status IN ('SENDING','UNKNOWN','PARTIAL'))`;
 
 export async function POST(request: Request) {
   const secret = process.env.CRM_POOL_SYNC_SECRET;

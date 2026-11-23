@@ -4,6 +4,9 @@ import { row,rows } from "@/lib/db";
 import { products,sources,statuses } from "@/lib/labels";
 import { assignInquiry,syncInquiryToCrm,transferInquiry,updateCustomer,updateInquiryDetails } from "./actions";
 import { acceptInquiry,markInquiryWon,moveNoReplyToPool,recordCommunication,reopenWonInquiry } from "./communication-actions";
+import { mailContext } from "@/lib/mail-template";
+import { EmailSendPanel } from "./email-send-panel";
+import { resolveEmailSendAttempt } from "./email-actions";
 
 type Inquiry={id:number;inquiry_no:string;customer_id:number;primary_email:string;name:string|null;company:string|null;country:string|null;phone:string|null;alternate_emails:string|null;note:string|null;source:string;product_category:string;requirement:string;status:string;owner_id:number|null;owner_name:string|null;assigned_at:string|null;accepted_at:string|null;accept_method:string|null;next_follow_up_at:string|null;reminder_overdue_at:string|null;deal_amount:number|null;currency:string;created_at:string};
 type Follow={id:number;user_name:string;method:string;content:string;customer_reply:string|null;next_follow_up_at:string|null;created_at:string};
@@ -50,9 +53,12 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
     ...follows.map(follow=>({kind:"follow" as const,id:follow.id,created_at:follow.created_at,follow}))
   ].sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id-a.id);
   const crmSync=row<any>("SELECT * FROM crm_syncs WHERE inquiry_id=?",id);
+  const emailAttempt=row<{status:string;from_email:string;to_email:string;subject:string;started_at:string;completed_at:string|null;error_message:string|null}>("SELECT status,from_email,to_email,subject,started_at,completed_at,error_message FROM email_send_attempts WHERE inquiry_id=?",id);
+  const smtpAccount=s.role==="SALES"?row<{email:string}>("SELECT email FROM smtp_accounts WHERE user_id=?",s.id):null;
+  const emailTemplates=s.role==="SALES"?rows<{id:number;name:string;subject:string;body:string}>("SELECT id,name,subject,body FROM email_templates WHERE user_id=? ORDER BY id",s.id):[];
   const firstEmailConfirmed=Boolean(q.accepted_at&&row<{id:number}>(`SELECT id FROM audit_logs
     WHERE entity_type='INQUIRY' AND entity_id=? AND action='ACCEPT'
-      AND summary='确认第一次开发邮件已发送，接受询盘'
+      AND (summary LIKE '确认第一次开发邮件已发送，接受询盘%' OR summary='领导核实第一次开发邮件已发送，接受询盘')
       LIMIT 1`,id));
   const isPublicPool=q.status==="NO_REPLY"||q.status==="PUBLIC_POOL";
   return <>
@@ -62,6 +68,8 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
     {s.role==="LEADER"&&<section className="panel"><div className="toolbar"><strong>询盘分配</strong><span className="subtle">分配前可参考登录、累计数量和最近一次接收记录</span></div><table className="table"><thead><tr><th>业务员</th><th>最后登录时间</th><th>累计分配询盘</th><th>上次收到询盘时间</th><th>上次询盘产品</th></tr></thead><tbody>{staff.map(u=><tr key={u.id}><td><strong>{u.display_name}</strong></td><td>{u.last_login_at?.slice(0,16)||"从未登录"}</td><td>{u.assigned_total||0} 条</td><td>{u.last_assigned_at?.slice(0,16)||"尚未分配"}</td><td>{u.last_product||"—"}</td></tr>)}</tbody></table><form action={assignInquiry} className="actions" style={{marginTop:18}}><input type="hidden" name="id" value={id}/><select name="owner"><option value="PUBLIC_POOL">公海（仅领导可见）</option>{staff.map(u=><option value={u.id} key={u.id}>{u.display_name}（累计 {u.assigned_total||0} 条）{u.last_product?` · 上次 ${u.last_product}`:" · 尚未分配"}</option>)}</select><button className="btn btn-primary">{q.owner_id||isPublicPool?"重新分配":"确认分配"}</button></form></section>}
     {s.role==="SALES"&&<section className="panel"><div className="toolbar"><div><strong>内部转交询盘</strong><p className="subtle">转交后你将无法再查看；原跟进记录保留，接收人需要重新接受询盘</p></div></div><form action={transferInquiry} className="actions"><input type="hidden" name="id" value={id}/><select name="target" required defaultValue=""><option value="" disabled>选择接收业务员</option>{staff.filter(u=>u.id!==s.id).map(u=><option value={u.id} key={u.id}>{u.display_name}</option>)}</select><button className="btn btn-primary" disabled={staff.filter(u=>u.id!==s.id).length===0}>确认转交</button></form></section>}
     <section className="panel"><div className="toolbar"><div><strong>悟空CRM建档</strong><p className="subtle">{isPublicPool?"使用领导CRM账号建档，并自动放入悟空CRM公海":"使用当前负责人的悟空CRM账号创建客户和联系人"}</p></div>{crmSync?.crm_contact_created?<span className="badge badge-green">已同步 · 客户 #{crmSync.crm_customer_id}</span>:<form action={syncInquiryToCrm}><input type="hidden" name="id" value={id}/><button className="btn btn-primary" disabled={!q.owner_id&&!(s.role==="LEADER"&&isPublicPool)}>{isPublicPool?"导入悟空CRM公海":"一键建档到悟空CRM"}</button></form>}</div>{!q.owner_id&&!isPublicPool&&<p className="subtle">请先分配业务员。</p>}{isPublicPool&&<p className="subtle">该询盘当前属于公海，仅领导可执行公海导入或重新分配。</p>}{crmSync?.last_error&&<div className="error">上次同步失败：{crmSync.last_error}</div>}</section>
+    {s.role==="SALES"&&!q.accepted_at&&q.status==="NEW"&&<EmailSendPanel id={id} fromEmail={smtpAccount?.email||null} toEmail={q.primary_email} templates={emailTemplates} attempt={emailAttempt||null} context={mailContext({customerName:q.name,company:q.company,product:q.product_category,requirement:q.requirement,senderName:s.name,email:q.primary_email,inquiryNo:q.inquiry_no})}/>}
+    {s.role==="LEADER"&&emailAttempt&&["SENDING","UNKNOWN","PARTIAL"].includes(emailAttempt.status)&&<section className="panel"><strong>开发信发送结果待核查</strong><p className="subtle">{emailAttempt.from_email} → {emailAttempt.to_email} · {emailAttempt.started_at?.slice(0,16)}</p><p>请先核对业务员企业邮箱的“已发送”及客户收件情况，再记录核查结论。</p><form action={resolveEmailSendAttempt}><input type="hidden" name="id" value={id}/><label className="field">核查结果<select name="resolution"><option value="sent">客户邮件已发送</option><option value="not_sent">确认客户邮件未发送</option></select></label><label className="field">核查说明<textarea name="note" required minLength={5}/></label><button className="btn">保存核查结果</button></form></section>}
     <div className="grid2">
       <section className="panel"><strong>接受询盘 / 第一次沟通</strong>
         {q.accepted_at?<div style={{marginTop:18}}><span className="badge badge-green">{firstEmailConfirmed?"第一次邮件已确认发送":"已接受（历史记录）"}</span>
