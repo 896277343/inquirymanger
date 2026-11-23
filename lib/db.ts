@@ -105,10 +105,32 @@ db.exec(`
     started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     completed_at TEXT
   );
-  CREATE TRIGGER IF NOT EXISTS lock_inquiry_during_email_send
+  CREATE TABLE IF NOT EXISTS email_send_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    inquiry_id INTEGER NOT NULL REFERENCES inquiries(id),
+    stage INTEGER NOT NULL CHECK(stage IN (1,2,3)),
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    template_id INTEGER REFERENCES email_templates(id) ON DELETE SET NULL,
+    from_email TEXT NOT NULL,
+    to_email TEXT NOT NULL,
+    cc_email TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('SENDING','ACCEPTED','PARTIAL','FAILED','UNKNOWN')),
+    message_id TEXT,
+    smtp_response TEXT,
+    error_message TEXT,
+    started_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    completed_at TEXT,
+    UNIQUE(inquiry_id,stage)
+  );
+  INSERT OR IGNORE INTO email_send_events
+    (inquiry_id,stage,user_id,template_id,from_email,to_email,cc_email,subject,body,status,message_id,smtp_response,error_message,started_at,completed_at)
+    SELECT inquiry_id,1,user_id,template_id,from_email,to_email,cc_email,subject,body,status,message_id,smtp_response,error_message,started_at,completed_at FROM email_send_attempts;
+  CREATE TRIGGER IF NOT EXISTS lock_inquiry_during_email_send_v2
   BEFORE UPDATE OF owner_id ON inquiries
   WHEN OLD.owner_id IS NOT NEW.owner_id
-    AND EXISTS (SELECT 1 FROM email_send_attempts e WHERE e.inquiry_id=OLD.id
+    AND EXISTS (SELECT 1 FROM email_send_events e WHERE e.inquiry_id=OLD.id
       AND e.status IN ('SENDING','UNKNOWN','PARTIAL'))
   BEGIN
     SELECT RAISE(ABORT, '开发信发送结果待核查，暂不能转交或重新分配');
@@ -168,6 +190,7 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_follow_inquiry ON follow_ups(inquiry_id);
   CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type,entity_id,id);
 `);
+db.exec("DROP TRIGGER IF EXISTS lock_inquiry_during_email_send");
 
 function ensureInquiryColumn(sql: string) {
   try { db.exec(sql); }
@@ -180,6 +203,7 @@ ensureInquiryColumn("ALTER TABLE users ADD COLUMN last_login_at TEXT");
 ensureInquiryColumn("ALTER TABLE users ADD COLUMN assignable INTEGER NOT NULL DEFAULT 1");
 ensureInquiryColumn("ALTER TABLE crm_syncs ADD COLUMN crm_pool_synced_at TEXT");
 ensureInquiryColumn("ALTER TABLE crm_syncs ADD COLUMN crm_pool_last_error TEXT");
+ensureInquiryColumn("ALTER TABLE email_templates ADD COLUMN stage INTEGER NOT NULL DEFAULT 1");
 
 db.exec("BEGIN IMMEDIATE");
 try {

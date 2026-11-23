@@ -4,15 +4,15 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { MailContext, renderMailText } from "@/lib/mail-template";
-import { sendFirstDevelopmentEmail } from "./email-actions";
+import { sendDevelopmentEmail } from "./email-actions";
 
 const DEVELOPMENT_CC = "sales@sf6relations.com";
 
 type Template = { id: number; name: string; subject: string; body: string };
 type Attempt = { status: string; from_email: string; to_email: string; subject: string; started_at: string; completed_at: string | null; error_message: string | null };
 
-export function EmailSendPanel({ id, fromEmail, toEmail, templates, context, attempt }:
-  { id: number; fromEmail: string | null; toEmail: string; templates: Template[]; context: MailContext; attempt: Attempt | null }) {
+export function EmailSendPanel({ id, stage, fromEmail, toEmail, templates, context, attempt }:
+  { id: number; stage: number; fromEmail: string | null; toEmail: string; templates: Template[]; context: MailContext; attempt: Attempt | null }) {
   const router = useRouter();
   const [templateId, setTemplateId] = useState(templates[0]?.id || 0);
   const [confirmed, setConfirmed] = useState(false);
@@ -22,7 +22,8 @@ export function EmailSendPanel({ id, fromEmail, toEmail, templates, context, att
   const locked = Boolean(attempt && attempt.status !== "FAILED");
 
   return <section className="panel">
-    <div className="toolbar"><strong>一键发送第一封开发信</strong><Link href="/settings/email">我的开发信设置</Link></div>
+    <div className="toolbar"><strong>一键发送{stage === 1 ? "第一次开发信" : `第${stage === 2 ? "二" : "三"}次沟通邮件`}</strong><Link href="/settings/email">我的开发信设置</Link></div>
+    {stage === 1 && <p className="subtle">历史询盘可能已通过企业邮箱手工发送首封邮件；发送前请核对“已发送”，避免重复联系客户。</p>}
     {attempt && <div className={attempt.status === "ACCEPTED" ? "subtle" : "error"}>
       发信记录：{({ SENDING: "发送处理中，请勿重复发送", UNKNOWN: "发送结果不确定，请先核查企业邮箱已发送记录并联系领导", PARTIAL: "部分地址被接收，请联系领导核查", ACCEPTED: "客户邮件已由邮箱服务器接收", FAILED: "发送失败，修正后可重试" } as Record<string, string>)[attempt.status] || attempt.status}
       {attempt.error_message && <p>{attempt.error_message}</p>}
@@ -30,7 +31,7 @@ export function EmailSendPanel({ id, fromEmail, toEmail, templates, context, att
     </div>}
     {!locked && <>
       {!fromEmail && <p className="error">请先在“我的开发信设置”保存企业邮箱及客户端专用密码。</p>}
-      {templates.length === 0 && <p className="error">请先创建至少一套开发信模板。</p>}
+      {templates.length === 0 && <p className="error">请先创建当前沟通阶段的邮件模板。</p>}
       {fromEmail && templates.length > 0 && <>
         <label className="field">选择模板<select value={templateId} onChange={event => { setTemplateId(Number(event.target.value)); setConfirmed(false); }}>
           {templates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
@@ -43,9 +44,9 @@ export function EmailSendPanel({ id, fromEmail, toEmail, templates, context, att
         <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)}/> 我已检查收件人、抄送及正文，确认发送</label>
         <div style={{marginTop:12}}><button className="btn btn-primary" type="button" disabled={!confirmed || pending} onClick={() => startTransition(async () => {
           const data = new FormData(); data.set("id", String(id)); data.set("templateId", String(templateId));
-          const result = await sendFirstDevelopmentEmail(data);
+          const result = await sendDevelopmentEmail(data);
           setMessage(result.message); setConfirmed(false); router.refresh();
-        })}>{pending ? "发送中…" : "发送开发信并接受询盘"}</button></div>
+        })}>{pending ? "发送中…" : "发送邮件并自动记录沟通"}</button></div>
         {message && <p className="subtle">{message}</p>}
       </>}
     </>}

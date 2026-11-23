@@ -16,7 +16,7 @@ function refresh(id: number) {
 
 export async function acceptInquiry(formData: FormData) {
   const session = await requireSession();
-  if (session.role !== "SALES") throw new Error("请由负责业务员确认首次邮件");
+  if (session.role !== "SALES") throw new Error("请由负责业务员接受询盘");
   const id = Number(formData.get("id"));
   if (!Number.isSafeInteger(id) || id <= 0) throw new Error("询盘编号不正确");
   db.exec("BEGIN IMMEDIATE");
@@ -25,14 +25,14 @@ export async function acceptInquiry(formData: FormData) {
     if (!inquiry || inquiry.owner_id !== session.id || inquiry.status !== "NEW" || inquiry.accepted_at) {
       throw new Error("该询盘已接受或不归你负责");
     }
-    const attempt = row<{ status: string }>("SELECT status FROM email_send_attempts WHERE inquiry_id=?", id);
+    const attempt = row<{ status: string }>("SELECT status FROM email_send_events WHERE inquiry_id=? AND stage=1", id);
     if (attempt && ["SENDING", "UNKNOWN", "PARTIAL"].includes(attempt.status)) throw new Error("该询盘有待核查的开发信发送记录，请先核查发信结果");
-    db.prepare(`UPDATE inquiries SET accepted_at=datetime('now','localtime'),accept_method='邮件',
-      status='CONTACTING',next_follow_up_at=datetime('now','localtime','+3 days'),
-      reminder_overdue_at=datetime('now','localtime','+5 days'),
+    db.prepare(`UPDATE inquiries SET accepted_at=datetime('now','localtime'),accept_method='待发送',
+      status='ACCEPTED',next_follow_up_at=datetime('now','localtime','+2 days'),
+      reminder_overdue_at=datetime('now','localtime','+2 days'),
       updated_at=datetime('now','localtime') WHERE id=? AND owner_id=?`).run(id, session.id);
-    audit(session.id, "ACCEPT", "INQUIRY", id, "确认第一次开发邮件已发送，接受询盘",
-      { before: { status: "NEW" }, after: { status: "CONTACTING" }, reminderDays: 3, overdueDays: 5 });
+    audit(session.id, "ACCEPT_RECEIVE", "INQUIRY", id, "接受询盘，待发送第一次开发信",
+      { before: { status: "NEW" }, after: { status: "ACCEPTED" }, reminderDays: 2 });
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
@@ -53,6 +53,9 @@ export async function recordCommunication(formData: FormData) {
   try {
     const inquiry = row<OwnedInquiry>("SELECT id,inquiry_no,owner_id,status,accepted_at FROM inquiries WHERE id=?", id);
     if (!inquiry || inquiry.owner_id !== session.id || !inquiry.accepted_at) throw new Error("请先接受自己负责的询盘");
+    if (row("SELECT 1 FROM email_send_events WHERE inquiry_id=? AND status IN ('SENDING','UNKNOWN','PARTIAL') LIMIT 1", id)) {
+      throw new Error("开发信发送结果待核查，请先确认后再更新沟通阶段");
+    }
     const transition: Record<string, { status: string; label: string; days: number }> = {
       CONTACTING: { status: "SECOND_CONTACT", label: "第二次沟通", days: 3 },
       SECOND_CONTACT: { status: "THIRD_CONTACT", label: "第三次沟通", days: 5 },

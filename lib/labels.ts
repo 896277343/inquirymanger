@@ -1,6 +1,6 @@
 export const sources: Record<string, string> = { GOOGLE_ADS: "谷歌广告", ORGANIC: "自然流量", LIVE_CHAT: "在线聊天留言" };
 export const statuses: Record<string, string> = {
-  UNASSIGNED: "待分配", NEW: "待接受", CONTACTING: "第一次沟通",
+  UNASSIGNED: "待分配", NEW: "待接受", ACCEPTED: "已接受待首封邮件", CONTACTING: "第一次沟通",
   SECOND_CONTACT: "第二次沟通", THIRD_CONTACT: "第三次沟通", ONGOING: "持续沟通中",
   WON: "已成交", NO_REPLY: "三次沟通无回复（公海）", PUBLIC_POOL: "公海",
   TECHNICAL: "技术沟通（历史）", QUOTED: "已报价（历史）",

@@ -6,13 +6,14 @@ import { DEVELOPMENT_CC, SMTP_HOST, SMTP_PORT } from "@/lib/smtp";
 import { deleteEmailTemplate, saveEmailTemplate, saveSmtpAccount } from "./actions";
 import { VerifySmtpButton } from "./verify-button";
 
-type Template = { id: number; name: string; subject: string; body: string };
+type Template = { id: number; name: string; subject: string; body: string; stage: number };
+const stageNames: Record<number,string> = {1:"第一次开发信",2:"第二次沟通",3:"第三次沟通"};
 
 export default async function EmailSettings() {
   const session = await requireSession();
   if (session.role !== "SALES") redirect("/dashboard");
   const account = row<{ email: string }>("SELECT email FROM smtp_accounts WHERE user_id=?", session.id);
-  const templates = rows<Template>("SELECT id,name,subject,body FROM email_templates WHERE user_id=? ORDER BY id", session.id);
+  const templates = rows<Template>("SELECT id,name,subject,body,stage FROM email_templates WHERE user_id=? ORDER BY stage,id", session.id);
 
   return <>
     <div className="topline"><div><div className="title">我的开发信设置</div>
@@ -30,6 +31,7 @@ export default async function EmailSettings() {
     <section className="panel"><strong>开发信模板（最多 10 套）</strong>
       <p className="subtle">可用变量：{mailVariables.map(name=>`{${name}}`).join("、")}。模板按纯文本发送，发送前会展示替换后的主题和正文。</p>
       <form action={saveEmailTemplate}>
+        <label className="field">适用沟通阶段<select name="stage" defaultValue="1">{Object.entries(stageNames).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
         <div className="grid2">
           <label className="field">模板名称<input name="name" required maxLength={80} placeholder="例如：SF6分析仪初次开发"/></label>
           <label className="field">邮件主题<input name="subject" required maxLength={200} placeholder="Regarding your inquiry about {产品分类}"/></label>
@@ -39,9 +41,10 @@ export default async function EmailSettings() {
       </form>
     </section>
     {templates.map(template=><section className="panel" key={template.id}>
-      <details><summary style={{cursor:"pointer",fontWeight:700}}>{template.name}</summary>
+      <details><summary style={{cursor:"pointer",fontWeight:700}}>{stageNames[template.stage]} · {template.name}</summary>
         <form action={saveEmailTemplate}>
           <input type="hidden" name="id" value={template.id}/>
+          <label className="field">适用沟通阶段<select name="stage" defaultValue={template.stage}>{Object.entries(stageNames).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label>
           <div className="grid2">
             <label className="field">模板名称<input name="name" required maxLength={80} defaultValue={template.name}/></label>
             <label className="field">邮件主题<input name="subject" required maxLength={200} defaultValue={template.subject}/></label>

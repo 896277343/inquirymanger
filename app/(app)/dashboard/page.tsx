@@ -4,7 +4,7 @@ import { row, rows } from "@/lib/db";
 import { sources, statuses } from "@/lib/labels";
 
 type Item = { id:number; inquiry_no:string; primary_email:string; company:string|null; product_category:string; source:string; status:string; owner_name:string|null; updated_at:string; assigned_at?:string; accepted_at?:string; accept_method?:string; next_follow_up_at?:string; reminder_overdue_at?:string; last_follow_up_at?:string; acceptance_deadline?:string; is_due?:number; is_overdue?:number };
-type SalesSummary = { id:number; display_name:string; total:number; fresh:number; first:number; second:number; third:number; ongoing:number; won:number; overdue:number };
+type SalesSummary = { id:number; display_name:string; total:number; fresh:number; awaiting_first:number; first:number; second:number; third:number; ongoing:number; won:number; overdue:number };
 type SalesFlow = { id:number; display_name:string; received:number; retained:number; followed:number; unfollowed:number; transferred:number; unaccepted_transfers:number; pool_out:number; auto_returned:number };
 type WeeklyOverall = { new_count:number; assigned_count:number; follow_count:number; pool_count:number; won_count:number; won_amount:number };
 type WeeklyRow = { label:string; inquiries:number; followups:number; won:number };
@@ -35,6 +35,7 @@ export default async function Dashboard() {
   const salesSummary = s.role === "LEADER" ? rows<SalesSummary>(`SELECT u.id,u.display_name,
     COUNT(i.id) total,
     SUM(CASE WHEN i.status='NEW' THEN 1 ELSE 0 END) fresh,
+    SUM(CASE WHEN i.status='ACCEPTED' THEN 1 ELSE 0 END) awaiting_first,
     SUM(CASE WHEN i.status='CONTACTING' THEN 1 ELSE 0 END) first,
     SUM(CASE WHEN i.status='SECOND_CONTACT' THEN 1 ELSE 0 END) second,
     SUM(CASE WHEN i.status='THIRD_CONTACT' THEN 1 ELSE 0 END) third,
@@ -59,9 +60,6 @@ export default async function Dashboard() {
         WHERE entity_type='INQUIRY' AND action='ACCEPT'
       UNION
       SELECT user_id,inquiry_id FROM follow_ups
-      UNION
-      SELECT owner_id user_id,id inquiry_id FROM inquiries
-        WHERE owner_id IS NOT NULL AND accepted_at IS NOT NULL
     )
     SELECT u.id,u.display_name,
       (SELECT COUNT(*) FROM received r WHERE r.user_id=u.id) received,
@@ -119,9 +117,9 @@ export default async function Dashboard() {
       <div style={{overflowX:"auto"}}><table className="table"><thead><tr><th>业务员</th><th>累计收到</th><th>当前留存</th><th>已跟进</th><th>未跟进</th><th>转交同事</th><th>其中未接受就转交</th><th>转入公海</th><th>48小时自动退回</th></tr></thead>
         <tbody>{salesFlow.map(x=><tr key={x.id}><td><strong>{x.display_name}</strong></td><td>{x.received}</td><td><Link href={`/inquiries?owner=${x.id}`}>{x.retained}</Link></td><td>{x.followed}</td><td>{x.unfollowed}</td><td>{x.transferred}</td><td>{x.unaccepted_transfers}</td><td>{x.pool_out}</td><td>{x.auto_returned}</td></tr>)}</tbody>
       </table></div>
-      <p className="subtle">累计收到按不同询盘去重；已跟进指该业务员曾接受询盘或写过跟进记录，未跟进为收到后从未做过这两项。当前留存按现负责人计算；转交、公海和自动退回按操作次数计算，因此各列不应直接相减。</p>
+      <p className="subtle">累计收到按不同询盘去重；已跟进指该业务员有历史首次发信确认或沟通记录，单独点击接受不算跟进。当前留存按现负责人计算；转交、公海和自动退回按操作次数计算，因此各列不应直接相减。</p>
     </section>}
-    {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>业务员当前进度</strong><span className="subtle">仅统计当前归属该业务员的询盘</span></div><table className="table"><thead><tr><th>业务员</th><th>当前负责</th><th>待接受</th><th>第一次</th><th>第二次</th><th>第三次</th><th>持续沟通</th><th>已成交</th><th>跟进逾期</th></tr></thead><tbody>{salesSummary.map(x => <tr key={x.id}><td><strong>{x.display_name}</strong></td><td>{x.total || 0}</td><td>{x.fresh || 0}</td><td>{x.first || 0}</td><td>{x.second || 0}</td><td>{x.third || 0}</td><td>{x.ongoing || 0}</td><td>{x.won || 0}</td><td><Link href={`/inquiries?owner=${x.id}&view=overdue`}>{x.overdue || 0}</Link></td></tr>)}</tbody></table></section>}
+    {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>业务员当前进度</strong><span className="subtle">仅统计当前归属该业务员的询盘</span></div><table className="table"><thead><tr><th>业务员</th><th>当前负责</th><th>待接受</th><th>待首封</th><th>第一次</th><th>第二次</th><th>第三次</th><th>持续沟通</th><th>已成交</th><th>跟进逾期</th></tr></thead><tbody>{salesSummary.map(x => <tr key={x.id}><td><strong>{x.display_name}</strong></td><td>{x.total || 0}</td><td>{x.fresh || 0}</td><td>{x.awaiting_first || 0}</td><td>{x.first || 0}</td><td>{x.second || 0}</td><td>{x.third || 0}</td><td>{x.ongoing || 0}</td><td>{x.won || 0}</td><td><Link href={`/inquiries?owner=${x.id}&view=overdue`}>{x.overdue || 0}</Link></td></tr>)}</tbody></table></section>}
     {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>CRM 公海自动同步</strong><span className="subtle">每日任务需在发布服务器配置；每次最多处理 50 条</span></div><p>当前公海：{(poolSync?.pending || 0)+(poolSync?.synced || 0)} 条 · 待同步：{poolSync?.pending || 0} 条 · 已入 CRM 公海：{poolSync?.synced || 0} 条 · 上次失败待重试：{poolSync?.failed || 0} 条</p><p className="subtle">仅处理当前归属公海的询盘；失败保留在待同步中，下一次自动重试。</p></section>}
     {s.role === "LEADER" && <section className="panel"><div className="toolbar"><strong>本周经营分析</strong><span className="subtle">统计周期：本周一至现在</span></div><div className="cards"><div className="card"><span className="subtle">新增询盘</span><div className="value">{weeklyOverall.new_count}</div></div><div className="card"><span className="subtle">本周分配</span><div className="value">{weeklyOverall.assigned_count}</div></div><div className="card"><span className="subtle">沟通次数</span><div className="value">{weeklyOverall.follow_count}</div></div><div className="card"><span className="subtle">转公海 / 成交</span><div className="value">{weeklyOverall.pool_count} / {weeklyOverall.won_count}</div></div></div><div className="grid2">
       <div><h3>按业务员</h3><table className="table"><thead><tr><th>业务员</th><th>分配</th><th>沟通</th><th>成交</th></tr></thead><tbody>{weeklySales.map(x=><tr key={x.label}><td>{x.label}</td><td>{x.inquiries||0}</td><td>{x.followups||0}</td><td>{x.won||0}</td></tr>)}</tbody></table></div>
@@ -133,7 +131,7 @@ export default async function Dashboard() {
       <div><h3>分配后48小时未接受（{firstFollowOverdue.length}）</h3>{firstFollowOverdue.length === 0 ? <p className="subtle">目前没有超时询盘。</p> : <table className="table"><tbody>{firstFollowOverdue.map(x => <tr key={x.id}><td><Link href={`/inquiries/${x.id}`}>{x.inquiry_no}</Link></td><td>{x.company || x.primary_email}</td><td>{x.owner_name}</td><td>{x.assigned_at?.slice(0,16)}</td></tr>)}</tbody></table>}</div>
       <div><h3>超过3个月未继续跟进（{dormant.length}）</h3>{dormant.length === 0 ? <p className="subtle">目前没有长期沉默询盘。</p> : <table className="table"><tbody>{dormant.map(x => <tr key={x.id}><td><Link href={`/inquiries/${x.id}`}>{x.inquiry_no}</Link></td><td>{x.company || x.primary_email}</td><td>{x.owner_name}</td><td>{x.last_follow_up_at?.slice(0,16)}</td></tr>)}</tbody></table>}</div>
     </div><div style={{marginTop:18}}><h3>最近自动退回待分配</h3>{autoReturns.length===0?<p className="subtle">暂无自动退回记录。</p>:<table className="table"><thead><tr><th>时间</th><th>询盘</th><th>原因</th></tr></thead><tbody>{autoReturns.map(x=><tr key={x.id}><td>{x.created_at}</td><td><Link href={`/inquiries/${x.entity_id}`}>查看询盘</Link></td><td>{x.summary}</td></tr>)}</tbody></table>}</div></section>}
-    {s.role === "SALES" && <section className="panel"><div className="toolbar"><strong>我的业务提醒</strong><span className="subtle">先接受询盘，再按进度自动提醒</span></div><div className="reminder-rules"><strong>业务跟进规则</strong><p>① 分配后 48 小时内发送第一封开发邮件并点击“接受询盘”，否则自动退回待分配。</p><p>② 第一次、第二次沟通后第 3 天提醒下一次，第 5 天起算逾期。</p><p>③ 第三次沟通后可手动确认无回复并转公海；继续沟通则每 5 天提醒，未处理会一直显示逾期。</p><p>④ 已成交停止提醒；所有确认与转交均保留操作记录。</p></div><div className="grid2">
+    {s.role === "SALES" && <section className="panel"><div className="toolbar"><strong>我的业务提醒</strong><span className="subtle">先接受询盘，再按进度自动提醒</span></div><div className="reminder-rules"><strong>业务跟进规则</strong><p>① 分配后 48 小时内点击“接受询盘”，否则自动退回待分配；接受后应尽快发送第一封开发信，未发送会在 48 小时后提醒并计入逾期。</p><p>② 首封和第二次沟通邮件发送成功后，自动记录沟通，第 3 天提醒下一次，第 5 天起算逾期。</p><p>③ 第三次沟通后可手动确认无回复并转公海；继续沟通则每 5 天提醒，未处理会一直显示逾期。</p><p>④ 已成交停止提醒；所有发信、确认与转交均保留操作记录。</p></div><div className="grid2">
       <div><h3>待接受询盘（{pendingAcceptance.length}）</h3>{pendingAcceptance.length===0?<p className="subtle">没有待接受询盘。</p>:<table className="table"><thead><tr><th>询盘</th><th>客户</th><th>接受期限</th></tr></thead><tbody>{pendingAcceptance.map(x=><tr key={x.id}><td><Link href={`/inquiries/${x.id}`}><strong>{x.inquiry_no}</strong></Link></td><td>{x.company||x.primary_email}</td><td>{x.acceptance_deadline?.slice(0,16)} {Boolean(x.is_overdue)&&<span className="badge">已超时</span>}</td></tr>)}</tbody></table>}</div>
       <div><h3>进度提醒（{progressReminders.length}）</h3>{progressReminders.length===0?<p className="subtle">没有待提醒询盘。</p>:<table className="table"><thead><tr><th>询盘</th><th>进度</th><th>提醒时间</th></tr></thead><tbody>{progressReminders.map(x=><tr key={x.id}><td><Link href={`/inquiries/${x.id}`}><strong>{x.inquiry_no}</strong></Link></td><td>{statuses[x.status]}</td><td>{x.next_follow_up_at?.slice(0,16)} {Boolean(x.is_overdue)?<span className="badge">已逾期</span>:Boolean(x.is_due)&&<span className="badge">已提醒</span>}</td></tr>)}</tbody></table>}</div>
     </div></section>}

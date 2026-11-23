@@ -63,22 +63,24 @@ export async function saveEmailTemplate(formData: FormData) {
   const name = String(formData.get("name") || "").trim();
   const subject = String(formData.get("subject") || "").trim();
   const body = String(formData.get("body") || "").trim();
+  const stage = Number(formData.get("stage"));
+  if (![1, 2, 3].includes(stage)) throw new Error("请选择第一、第二或第三次沟通");
   if (!name || name.length > 80) throw new Error("模板名称需为 1–80 字");
   if (!subject || subject.length > 200 || /[\r\n]/.test(subject)) throw new Error("邮件主题需为单行且不超过 200 字");
   if (!body || body.length > 10000) throw new Error("邮件正文需为 1–10000 字");
   const unknown = unknownMailVariables(subject + "\n" + body);
   if (unknown.length) throw new Error(`未知模板变量：${unknown.join("、")}`);
   if (id) {
-    const result = db.prepare(`UPDATE email_templates SET name=?,subject=?,body=?,
+    const result = db.prepare(`UPDATE email_templates SET name=?,subject=?,body=?,stage=?,
       updated_at=datetime('now','localtime') WHERE id=? AND user_id=?`)
-      .run(name, subject, body, id, session.id);
+      .run(name, subject, body, stage, id, session.id);
     if (result.changes !== 1) throw new Error("只能修改自己的模板");
     audit(session.id, "UPDATE", "EMAIL_TEMPLATE", id, `更新开发信模板：${name}`);
   } else {
     const count = row<{ count: number }>("SELECT COUNT(*) count FROM email_templates WHERE user_id=?", session.id)?.count || 0;
     if (count >= 10) throw new Error("每个业务员最多保存 10 套模板");
-    const result = db.prepare("INSERT INTO email_templates(user_id,name,subject,body) VALUES(?,?,?,?)")
-      .run(session.id, name, subject, body);
+    const result = db.prepare("INSERT INTO email_templates(user_id,name,subject,body,stage) VALUES(?,?,?,?,?)")
+      .run(session.id, name, subject, body, stage);
     audit(session.id, "CREATE", "EMAIL_TEMPLATE", Number(result.lastInsertRowid), `创建开发信模板：${name}`);
   }
   revalidatePath("/settings/email");
