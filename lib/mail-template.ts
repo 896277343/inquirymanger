@@ -13,6 +13,21 @@ export function renderMailText(value: string, context: MailContext) {
     Object.prototype.hasOwnProperty.call(context, name) ? context[name as keyof MailContext] : full);
 }
 
+export function escapeMailHtml(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+export function plainTextToHtml(value: string) {
+  return `<p>${escapeMailHtml(value).replace(/\r?\n/g, "<br>")}</p>`;
+}
+
+export function renderMailHtml(value: string, context: MailContext) {
+  return value.replace(/\{([^{}]+)\}/g, (full, name: string) =>
+    Object.prototype.hasOwnProperty.call(context, name)
+      ? escapeMailHtml(context[name as keyof MailContext]).replace(/\r?\n/g, "<br>") : full);
+}
+
 export function mailContext(input: {
   customerName: string | null; company: string | null; product: string;
   requirement: string; senderName: string; email: string; inquiryNo: string;

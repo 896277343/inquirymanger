@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { requireLeader, requireSession } from "@/lib/auth";
 import { audit, db, row } from "@/lib/db";
-import { mailContext, renderMailText } from "@/lib/mail-template";
+import { mailContext, plainTextToHtml, renderMailHtml, renderMailText } from "@/lib/mail-template";
+import { cleanMailHtml } from "@/lib/mail-html";
 import { emailStageName, nextEmailStage } from "@/lib/email-stage";
 import { decryptSecret } from "@/lib/secrets";
 import { createSmtpTransport, DEVELOPMENT_CC, validMailAddress } from "@/lib/smtp";
@@ -61,6 +62,8 @@ export async function sendDevelopmentEmail(formData: FormData) {
   let password = "";
   let subject = "";
   let body = "";
+  let bodyHtml = "";
+  let ccRecipients: string[] = [];
   let templateName = "";
   let stage = 0;
   let reserved = false;
@@ -78,9 +81,10 @@ export async function sendDevelopmentEmail(formData: FormData) {
       "SELECT email,password_encrypted FROM smtp_accounts WHERE user_id=?", session.id);
     if (!account || !validMailAddress(account.email)) throw new Error("请先在“我的开发信设置”配置企业邮箱");
     fromEmail = account.email;
+    ccRecipients = [...new Set([DEVELOPMENT_CC, fromEmail].map(address => address.toLowerCase()))];
     password = decryptSecret(account.password_encrypted);
-    const template = row<{ name: string; subject: string; body: string }>(
-      "SELECT name,subject,body FROM email_templates WHERE id=? AND user_id=? AND stage=?", templateId, session.id, stage);
+    const template = row<{ name: string; subject: string; body: string; body_html: string | null }>(
+      "SELECT name,subject,body,body_html FROM email_templates WHERE id=? AND user_id=? AND stage=?", templateId, session.id, stage);
     if (!template) throw new Error("模板不存在或不属于你");
     templateName = template.name;
     const context = mailContext({
@@ -90,24 +94,25 @@ export async function sendDevelopmentEmail(formData: FormData) {
     });
     subject = renderMailText(template.subject, context).replace(/[\r\n]+/g, " ").trim();
     body = renderMailText(template.body, context).trim();
-    if (!subject || !body || subject.length > 500 || body.length > 30000) throw new Error("模板替换后的邮件内容无效");
+    bodyHtml = cleanMailHtml(renderMailHtml(cleanMailHtml(template.body_html || plainTextToHtml(template.body)), context));
+    if (!subject || !body || !bodyHtml || subject.length > 500 || body.length > 30000 || bodyHtml.length > 60000) throw new Error("模板替换后的邮件内容无效");
     const previous = row<Attempt>("SELECT status FROM email_send_events WHERE inquiry_id=? AND stage=?", id, stage);
     if (previous && previous.status !== "FAILED") {
       throw new Error("该询盘已有发送记录，请先核查状态，系统不会重复发送");
     }
     if (previous) {
       db.prepare(`UPDATE email_send_events SET user_id=?,template_id=?,from_email=?,to_email=?,cc_email=?,
-        subject=?,body=?,status='SENDING',message_id=NULL,smtp_response=NULL,error_message=NULL,
+        subject=?,body=?,body_html=?,status='SENDING',message_id=NULL,smtp_response=NULL,error_message=NULL,
         started_at=datetime('now','localtime'),completed_at=NULL WHERE inquiry_id=? AND stage=?`)
-        .run(session.id, templateId, fromEmail, toEmail, DEVELOPMENT_CC, subject, body, id, stage);
+        .run(session.id, templateId, fromEmail, toEmail, ccRecipients.join(", "), subject, body, bodyHtml, id, stage);
     } else {
       db.prepare(`INSERT INTO email_send_events
-        (inquiry_id,stage,user_id,template_id,from_email,to_email,cc_email,subject,body,status)
-        VALUES(?,?,?,?,?,?,?,?,?,'SENDING')`)
-        .run(id, stage, session.id, templateId, fromEmail, toEmail, DEVELOPMENT_CC, subject, body);
+        (inquiry_id,stage,user_id,template_id,from_email,to_email,cc_email,subject,body,body_html,status)
+        VALUES(?,?,?,?,?,?,?,?,?,?,'SENDING')`)
+        .run(id, stage, session.id, templateId, fromEmail, toEmail, ccRecipients.join(", "), subject, body, bodyHtml);
     }
     audit(session.id, "EMAIL_SEND_START", "INQUIRY", id, `开始发送${emailStageName[stage]}：${toEmail}`,
-      { stage, templateId, templateName, cc: DEVELOPMENT_CC });
+      { stage, templateId, templateName, cc: ccRecipients });
     db.exec("COMMIT");
     reserved = true;
   } catch (error) {
@@ -120,22 +125,25 @@ export async function sendDevelopmentEmail(formData: FormData) {
     const info = await transport.sendMail({
       from: { name: session.name, address: fromEmail },
       to: toEmail,
-      cc: DEVELOPMENT_CC,
+      cc: ccRecipients,
       subject,
-      text: body
+      text: body,
+      html: `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#222">${bodyHtml}</div>`
     });
     const accepted = info.accepted.map(address => address.toLowerCase());
     const customerAccepted = accepted.includes(toEmail);
-    const ccAccepted = accepted.includes(DEVELOPMENT_CC);
+    const missingCc = ccRecipients.filter(address => !accepted.includes(address));
+    const ccAccepted = missingCc.length === 0;
     const status = customerAccepted ? "ACCEPTED" : "PARTIAL";
     db.exec("BEGIN IMMEDIATE");
     try {
       db.prepare(`UPDATE email_send_events SET status=?,message_id=?,smtp_response=?,
         error_message=?,completed_at=datetime('now','localtime') WHERE inquiry_id=? AND stage=?`)
         .run(status, info.messageId, info.response.slice(0, 500),
-          !customerAccepted || !ccAccepted ? "收件人或固定抄送有一方未被 SMTP 服务器接受，请核查" : null, id, stage);
+          !customerAccepted ? "客户邮箱未被 SMTP 服务器接受，请核查" :
+            missingCc.length ? `抄送未被 SMTP 服务器接受：${missingCc.join("、")}` : null, id, stage);
       audit(session.id, customerAccepted && ccAccepted ? "EMAIL_SENT" : "EMAIL_PARTIAL", "INQUIRY", id,
-        customerAccepted && ccAccepted ? `${emailStageName[stage]}已提交邮箱服务器：${toEmail}，抄送 ${DEVELOPMENT_CC}` :
+        customerAccepted && ccAccepted ? `${emailStageName[stage]}已提交邮箱服务器：${toEmail}，抄送 ${ccRecipients.join("、")}` :
           `${emailStageName[stage]}部分接收：客户 ${customerAccepted ? "已接收" : "未接收"}，抄送 ${ccAccepted ? "已接收" : "未接收"}`,
         { stage, messageId: info.messageId, templateId, accepted: info.accepted, rejected: info.rejected });
       if (customerAccepted) {
@@ -148,8 +156,8 @@ export async function sendDevelopmentEmail(formData: FormData) {
     }
     refresh(id);
     return customerAccepted
-      ? { ok: true, message: ccAccepted ? `${emailStageName[stage]}已发送并自动记录沟通` :
-          `${emailStageName[stage]}已发送并记录沟通，但固定抄送未成功，请通知领导核查` }
+      ? { ok: true, message: ccAccepted ? `${emailStageName[stage]}已发送并自动记录沟通，已抄送公司和自己` :
+          `${emailStageName[stage]}已发送并记录沟通，但以下抄送未成功：${missingCc.join("、")}` }
       : { ok: false, message: "客户邮箱未被服务器接收，但抄送可能已发送；请核查后再处理" };
   } catch (error) {
     const status = safeFailure(error);

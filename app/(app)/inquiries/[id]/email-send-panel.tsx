@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { MailContext, renderMailText } from "@/lib/mail-template";
+import { MailContext, renderMailHtml, renderMailText } from "@/lib/mail-template";
 import { sendDevelopmentEmail } from "./email-actions";
 
 const DEVELOPMENT_CC = "sales@sf6relations.com";
 
-type Template = { id: number; name: string; subject: string; body: string };
+type Template = { id: number; name: string; subject: string; body: string; bodyHtml: string };
 type Attempt = { status: string; from_email: string; to_email: string; subject: string; started_at: string; completed_at: string | null; error_message: string | null };
 
 export function EmailSendPanel({ id, stage, fromEmail, toEmail, templates, context, attempt }:
@@ -37,9 +37,9 @@ export function EmailSendPanel({ id, stage, fromEmail, toEmail, templates, conte
           {templates.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select></label>
         <div className="field"><strong>发送前预览</strong>
-          <p>发件人：{fromEmail}<br/>收件人：{toEmail}<br/>固定抄送：{DEVELOPMENT_CC}</p>
+          <p>发件人：{fromEmail}<br/>收件人：{toEmail}<br/>抄送公司：{DEVELOPMENT_CC}<br/>抄送自己：{fromEmail}</p>
           <p>主题：{template && renderMailText(template.subject, context)}</p>
-          <div style={{whiteSpace:"pre-wrap", border:"1px solid #dbe3eb", borderRadius:8, padding:16}}>{template && renderMailText(template.body, context)}</div>
+          <div style={{border:"1px solid #dbe3eb", borderRadius:8, padding:16, lineHeight:1.6}} dangerouslySetInnerHTML={{__html:template ? renderMailHtml(template.bodyHtml, context) : ""}}/>
         </div>
         <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)}/> 我已检查收件人、抄送及正文，确认发送</label>
         <div style={{marginTop:12}}><button className="btn btn-primary" type="button" disabled={!confirmed || pending} onClick={() => startTransition(async () => {

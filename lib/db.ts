@@ -116,6 +116,7 @@ db.exec(`
     cc_email TEXT NOT NULL,
     subject TEXT NOT NULL,
     body TEXT NOT NULL,
+    body_html TEXT,
     status TEXT NOT NULL CHECK(status IN ('SENDING','ACCEPTED','PARTIAL','FAILED','UNKNOWN')),
     message_id TEXT,
     smtp_response TEXT,
@@ -204,6 +205,8 @@ ensureInquiryColumn("ALTER TABLE users ADD COLUMN assignable INTEGER NOT NULL DE
 ensureInquiryColumn("ALTER TABLE crm_syncs ADD COLUMN crm_pool_synced_at TEXT");
 ensureInquiryColumn("ALTER TABLE crm_syncs ADD COLUMN crm_pool_last_error TEXT");
 ensureInquiryColumn("ALTER TABLE email_templates ADD COLUMN stage INTEGER NOT NULL DEFAULT 1");
+ensureInquiryColumn("ALTER TABLE email_templates ADD COLUMN body_html TEXT");
+ensureInquiryColumn("ALTER TABLE email_send_events ADD COLUMN body_html TEXT");
 
 db.exec("BEGIN IMMEDIATE");
 try {

@@ -19,12 +19,14 @@
     "nodemailer": "^10.6.1",
     "react": "latest",
     "react-dom": "latest",
+    "sanitize-html": "^2.18.2",
     "zod": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@types/sanitize-html": "^2.16.2",
     "eslint": "latest",
     "eslint-config-next": "latest",
     "typescript": "latest"

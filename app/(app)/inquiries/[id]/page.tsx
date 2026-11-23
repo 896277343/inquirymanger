@@ -8,6 +8,8 @@ import { mailContext } from "@/lib/mail-template";
 import { EmailSendPanel } from "./email-send-panel";
 import { resolveEmailSendAttempt } from "./email-actions";
 import { emailStageName, firstEmailSent, nextEmailStage } from "@/lib/email-stage";
+import { cleanMailHtml } from "@/lib/mail-html";
+import { plainTextToHtml } from "@/lib/mail-template";
 
 type Inquiry={id:number;inquiry_no:string;customer_id:number;primary_email:string;name:string|null;company:string|null;country:string|null;phone:string|null;alternate_emails:string|null;note:string|null;source:string;product_category:string;requirement:string;status:string;owner_id:number|null;owner_name:string|null;assigned_at:string|null;accepted_at:string|null;accept_method:string|null;next_follow_up_at:string|null;reminder_overdue_at:string|null;deal_amount:number|null;currency:string;created_at:string};
 type Follow={id:number;user_name:string;method:string;content:string;customer_reply:string|null;next_follow_up_at:string|null;created_at:string};
@@ -59,7 +61,7 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
   const emailAttempt=emailAttemptRecord?{...emailAttemptRecord}:null;
   const pendingEmailAttempts=s.role==="LEADER"?rows<{stage:number;status:string;from_email:string;to_email:string;started_at:string}>("SELECT stage,status,from_email,to_email,started_at FROM email_send_events WHERE inquiry_id=? AND status IN ('SENDING','UNKNOWN','PARTIAL') ORDER BY stage",id):[];
   const smtpAccount=s.role==="SALES"?row<{email:string}>("SELECT email FROM smtp_accounts WHERE user_id=?",s.id):null;
-  const emailTemplates=s.role==="SALES"&&emailStage?rows<{id:number;name:string;subject:string;body:string}>("SELECT id,name,subject,body FROM email_templates WHERE user_id=? AND stage=? ORDER BY id",s.id,emailStage).map(template=>({...template})):[];
+  const emailTemplates=s.role==="SALES"&&emailStage?rows<{id:number;name:string;subject:string;body:string;body_html:string|null}>("SELECT id,name,subject,body,body_html FROM email_templates WHERE user_id=? AND stage=? ORDER BY id",s.id,emailStage).map(template=>({id:template.id,name:template.name,subject:template.subject,body:template.body,bodyHtml:cleanMailHtml(template.body_html||plainTextToHtml(template.body))})):[];
   const firstEmailConfirmed=Boolean(q.accepted_at&&firstEmailSent(id));
   const isPublicPool=q.status==="NO_REPLY"||q.status==="PUBLIC_POOL";
   return <>
