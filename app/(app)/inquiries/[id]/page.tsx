@@ -53,9 +53,10 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
     ...follows.map(follow=>({kind:"follow" as const,id:follow.id,created_at:follow.created_at,follow}))
   ].sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id-a.id);
   const crmSync=row<any>("SELECT * FROM crm_syncs WHERE inquiry_id=?",id);
-  const emailAttempt=row<{status:string;from_email:string;to_email:string;subject:string;started_at:string;completed_at:string|null;error_message:string|null}>("SELECT status,from_email,to_email,subject,started_at,completed_at,error_message FROM email_send_attempts WHERE inquiry_id=?",id);
+  const emailAttemptRecord=row<{status:string;from_email:string;to_email:string;subject:string;started_at:string;completed_at:string|null;error_message:string|null}>("SELECT status,from_email,to_email,subject,started_at,completed_at,error_message FROM email_send_attempts WHERE inquiry_id=?",id);
+  const emailAttempt=emailAttemptRecord?{...emailAttemptRecord}:null;
   const smtpAccount=s.role==="SALES"?row<{email:string}>("SELECT email FROM smtp_accounts WHERE user_id=?",s.id):null;
-  const emailTemplates=s.role==="SALES"?rows<{id:number;name:string;subject:string;body:string}>("SELECT id,name,subject,body FROM email_templates WHERE user_id=? ORDER BY id",s.id):[];
+  const emailTemplates=s.role==="SALES"?rows<{id:number;name:string;subject:string;body:string}>("SELECT id,name,subject,body FROM email_templates WHERE user_id=? ORDER BY id",s.id).map(template=>({...template})):[];
   const firstEmailConfirmed=Boolean(q.accepted_at&&row<{id:number}>(`SELECT id FROM audit_logs
     WHERE entity_type='INQUIRY' AND entity_id=? AND action='ACCEPT'
       AND (summary LIKE '确认第一次开发邮件已发送，接受询盘%' OR summary='领导核实第一次开发邮件已发送，接受询盘')
