@@ -32,8 +32,8 @@ function completeEmailStage(id: number, userId: number, stage: number, messageId
     WHERE id=? AND owner_id=? AND accepted_at IS NOT NULL AND status=?`)
     .run(after, `+${days} days`, id, userId, before);
   if (changed.changes !== 1) throw new Error("邮件已发送，但询盘负责人或阶段发生变化，请领导核查");
-  const follow = db.prepare(`INSERT INTO follow_ups(inquiry_id,user_id,method,content,next_follow_up_at)
-    VALUES(?,?, '邮件', ?,datetime('now','localtime',?))`)
+  const follow = db.prepare(`INSERT INTO follow_ups(inquiry_id,user_id,method,content,next_follow_up_at,created_at)
+    VALUES(?,?, '邮件', ?,datetime('now','localtime',?),datetime('now','localtime'))`)
     .run(id, userId, `${emailStageName[stage]}已通过企业邮箱发送；主题：${subject}`, `+${days} days`);
   audit(actorId, "FOLLOW_UP", "INQUIRY", id, `${emailStageName[stage]}：邮件自动记录`,
     { followUpId: Number(follow.lastInsertRowid), before: {status: before}, after: {status: after}, messageId, reminderDays: days });

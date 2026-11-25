@@ -252,6 +252,23 @@ try {
       UPDATE app_settings SET value='complete',updated_at=datetime('now','localtime') WHERE key='local_time_migration_v1';
     `);
   }
+  const followTimeMigration = db.prepare("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES('follow_time_from_audit_v1','complete',datetime('now','localtime'))").run();
+  if (followTimeMigration.changes > 0) {
+    db.exec(`UPDATE follow_ups SET created_at=(
+      SELECT al.created_at FROM audit_logs al
+      WHERE al.action='FOLLOW_UP' AND al.entity_type='INQUIRY'
+        AND al.entity_id=follow_ups.inquiry_id
+        AND CASE WHEN json_valid(al.details) THEN CAST(json_extract(al.details,'$.followUpId') AS INTEGER) END=follow_ups.id
+        AND datetime(follow_ups.created_at,'+8 hours')=al.created_at
+      ORDER BY al.id DESC LIMIT 1
+    ) WHERE EXISTS (
+      SELECT 1 FROM audit_logs al
+      WHERE al.action='FOLLOW_UP' AND al.entity_type='INQUIRY'
+        AND al.entity_id=follow_ups.inquiry_id
+        AND CASE WHEN json_valid(al.details) THEN CAST(json_extract(al.details,'$.followUpId') AS INTEGER) END=follow_ups.id
+        AND datetime(follow_ups.created_at,'+8 hours')=al.created_at
+    )`);
+  }
   const poolAuditMigration = db.prepare("INSERT OR IGNORE INTO app_settings(key,value,updated_at) VALUES('manual_pool_sync_audit_v1','complete',datetime('now','localtime'))").run();
   if (poolAuditMigration.changes > 0) {
     db.exec(`UPDATE crm_syncs SET crm_pool_synced_at=(

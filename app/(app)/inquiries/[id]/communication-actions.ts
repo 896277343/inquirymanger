@@ -71,8 +71,8 @@ export async function recordCommunication(formData: FormData) {
       reminder_overdue_at=datetime('now','localtime','+5 days'),updated_at=datetime('now','localtime')
       WHERE id=? AND owner_id=?`).run(next.status, `+${next.days} days`, id, session.id);
     const content = `${next.label}：${note || `已通过${method}联系客户`}`;
-    const follow = db.prepare(`INSERT INTO follow_ups(inquiry_id,user_id,method,content,next_follow_up_at)
-      VALUES(?,?,?,?,datetime('now','localtime',?))`).run(id, session.id, method, content, `+${next.days} days`);
+    const follow = db.prepare(`INSERT INTO follow_ups(inquiry_id,user_id,method,content,next_follow_up_at,created_at)
+      VALUES(?,?,?,?,datetime('now','localtime',?),datetime('now','localtime'))`).run(id, session.id, method, content, `+${next.days} days`);
     audit(session.id, "FOLLOW_UP", "INQUIRY", id, `${next.label}：${method}`,
       { followUpId: Number(follow.lastInsertRowid), before: { status: inquiry.status },
         after: { status: next.status }, reminderDays: next.days, overdueDays: 5 });
