@@ -11,6 +11,7 @@ import { emailStageName, firstEmailSent, nextEmailStage } from "@/lib/email-stag
 import { cleanMailHtml } from "@/lib/mail-html";
 import { plainTextToHtml } from "@/lib/mail-template";
 import { GoogleSearchField } from "./google-search-field";
+import { CopyEmailButton } from "./copy-email-button";
 
 type Inquiry={id:number;inquiry_no:string;customer_id:number;primary_email:string;name:string|null;company:string|null;country:string|null;phone:string|null;alternate_emails:string|null;note:string|null;source:string;product_category:string;requirement:string;status:string;owner_id:number|null;owner_name:string|null;assigned_at:string|null;accepted_at:string|null;accept_method:string|null;next_follow_up_at:string|null;reminder_overdue_at:string|null;deal_amount:number|null;currency:string;created_at:string};
 type Follow={id:number;user_name:string;method:string;content:string;customer_reply:string|null;next_follow_up_at:string|null;created_at:string};
@@ -49,12 +50,22 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
   const follows=rows<Follow>("SELECT f.*,u.display_name user_name FROM follow_ups f JOIN users u ON u.id=f.user_id WHERE inquiry_id=? ORDER BY f.created_at DESC,f.id DESC",id);
   const logs=rows<AuditEntry>(`SELECT l.id,l.action,l.entity_type,l.summary,l.details,l.created_at,u.display_name user_name
     FROM audit_logs l LEFT JOIN users u ON u.id=l.user_id
-    WHERE (l.entity_type='INQUIRY' AND l.entity_id=? AND l.action<>'FOLLOW_UP')
+    WHERE (l.entity_type='INQUIRY' AND l.entity_id=?)
       OR (l.entity_type='CUSTOMER' AND l.entity_id=? AND l.action='UPDATE')
     ORDER BY l.created_at DESC,l.id DESC`,id,q.customer_id);
+  const followIds=new Set(follows.map(follow=>follow.id));
+  const auditByFollowId=new Map<number,AuditEntry>();
+  for(const log of logs){
+    if(log.action!=="FOLLOW_UP"||!log.details)continue;
+    try{
+      const followId=JSON.parse(log.details)?.followUpId;
+      if(typeof followId==="number"&&followIds.has(followId))auditByFollowId.set(followId,log);
+    }catch{/* Older audit details may not be JSON. */}
+  }
+  const mergedAuditIds=new Set([...auditByFollowId.values()].map(log=>log.id));
   const timeline=[
-    ...logs.map(log=>({kind:"log" as const,id:log.id,created_at:log.created_at,log})),
-    ...follows.map(follow=>({kind:"follow" as const,id:follow.id,created_at:follow.created_at,follow}))
+    ...logs.filter(log=>!mergedAuditIds.has(log.id)).map(log=>({kind:"log" as const,id:log.id,created_at:log.created_at,log})),
+    ...follows.map((follow,index)=>({kind:"follow" as const,id:follow.id,created_at:follow.created_at,follow,audit:auditByFollowId.get(follow.id),sequence:follows.length-index}))
   ].sort((a,b)=>b.created_at.localeCompare(a.created_at)||b.id-a.id);
   const crmSync=row<any>("SELECT * FROM crm_syncs WHERE inquiry_id=?",id);
   const emailStage=s.role==="SALES"?nextEmailStage(id,q.status,q.accepted_at):null;
@@ -68,7 +79,7 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
   const isPublicPool=q.status==="NO_REPLY"||q.status==="PUBLIC_POOL";
   return <>
     <div className="topline"><div><div className="title">{q.inquiry_no}</div><p className="subtle">{q.company||q.name||q.primary_email} · {q.product_category}</p></div><span className="badge badge-green">{statuses[q.status]}</span></div>
-    <section className="panel"><div className="meta"><div><label>客户邮箱（唯一标识）</label><div className="meta-search-line"><span>{q.primary_email}</span><a className="btn btn-small" href={`https://www.google.com/search?q=${encodeURIComponent(q.primary_email)}`} target="_blank" rel="noopener noreferrer">谷歌搜索</a></div></div><div><label>询盘来源</label>{sources[q.source]}</div><div><label>当前负责人</label>{isPublicPool?"公海":q.owner_name||"尚未分配"}</div><div><label>收到时间</label>{q.created_at.slice(0,16)}</div><div><label>下次跟进</label>{q.next_follow_up_at||"未设置"}</div><div><label>成交金额</label>{q.deal_amount?`${q.currency} ${q.deal_amount}`:"—"}</div></div><div className="field"><strong>客户需求</strong><div style={{whiteSpace:"pre-wrap"}}>{q.requirement}</div></div></section>
+    <section className="panel"><div className="meta"><div><label>客户邮箱（唯一标识）</label><div className="meta-search-line"><span>{q.primary_email}</span><CopyEmailButton email={q.primary_email}/><a className="btn btn-small" href={`https://www.google.com/search?q=${encodeURIComponent(q.primary_email)}`} target="_blank" rel="noopener noreferrer">谷歌搜索</a></div></div><div><label>询盘来源</label>{sources[q.source]}</div><div><label>当前负责人</label>{isPublicPool?"公海":q.owner_name||"尚未分配"}</div><div><label>收到时间</label>{q.created_at.slice(0,16)}</div><div><label>下次跟进</label>{q.next_follow_up_at||"未设置"}</div><div><label>成交金额</label>{q.deal_amount?`${q.currency} ${q.deal_amount}`:"—"}</div></div><div className="field"><strong>客户需求</strong><div style={{whiteSpace:"pre-wrap"}}>{q.requirement}</div></div></section>
     {s.role==="LEADER"&&<section className="panel"><div className="toolbar"><strong>编辑询盘资料</strong><span className="subtle">仅领导可修改，保存后写入操作日志</span></div><form action={updateInquiryDetails}><input type="hidden" name="id" value={id}/><div className="grid2"><label className="field">客户主邮箱 *<input name="email" type="email" required defaultValue={q.primary_email}/></label><label className="field">询盘来源<select name="source" defaultValue={q.source}>{Object.entries(sources).map(([v,l])=><option value={v} key={v}>{l}</option>)}</select></label><label className="field">产品分类<select name="product" defaultValue={q.product_category}>{products.map(p=><option key={p}>{p}</option>)}</select></label></div><label className="field">客户需求 *<textarea name="requirement" required defaultValue={q.requirement}/></label><button className="btn">保存询盘修改</button></form></section>}
     {s.role==="LEADER"&&<section className="panel"><div className="toolbar"><strong>询盘分配</strong><span className="subtle">分配前可参考登录、累计数量和最近一次接收记录</span></div><table className="table"><thead><tr><th>业务员</th><th>最后登录时间</th><th>累计分配询盘</th><th>上次收到询盘时间</th><th>上次询盘产品</th></tr></thead><tbody>{staff.map(u=><tr key={u.id}><td><strong>{u.display_name}</strong></td><td>{u.last_login_at?.slice(0,16)||"从未登录"}</td><td>{u.assigned_total||0} 条</td><td>{u.last_assigned_at?.slice(0,16)||"尚未分配"}</td><td>{u.last_product||"—"}</td></tr>)}</tbody></table><form action={assignInquiry} className="actions" style={{marginTop:18}}><input type="hidden" name="id" value={id}/><select name="owner"><option value="PUBLIC_POOL">公海（仅领导可见）</option>{staff.map(u=><option value={u.id} key={u.id}>{u.display_name}（累计 {u.assigned_total||0} 条）{u.last_product?` · 上次 ${u.last_product}`:" · 尚未分配"}</option>)}</select><button className="btn btn-primary">{q.owner_id||isPublicPool?"重新分配":"确认分配"}</button></form></section>}
     <div className={s.role==="SALES"?"grid2":undefined}>
@@ -116,11 +127,13 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
         </div>
       </section>
     </div>
-    <section className="panel"><strong>询盘处理时间线</strong><p className="subtle">按时间展示这条询盘的分配、接受、转交、进度、客户资料、CRM 同步和历史跟进记录。</p>
+    <section className="panel"><strong>询盘处理时间线 · 累计跟进 {follows.length} 次</strong><p className="subtle">按时间展示这条询盘的分配、接受、转交、进度、客户资料、CRM 同步和历史跟进记录。</p>
       <div className="timeline" style={{marginTop:20}}>
         {timeline.map(event=>event.kind==="follow"?<div className="event" key={`follow-${event.id}`}>
-          <strong>{event.follow.user_name} · 跟进记录 · {event.follow.method}</strong>
+          <strong>{event.follow.user_name} · 第 {event.sequence} 次跟进 · {event.follow.method}</strong>
           <p style={{whiteSpace:"pre-wrap"}}>{event.follow.content}</p>
+          {event.audit&&changesFor(event.audit).map(change=><p className="subtle" key={change.label}>{change.label}：{change.before} → {change.after}</p>)}
+          {event.audit?.user_name&&event.audit.user_name!==event.follow.user_name&&<p className="subtle">操作人：{event.audit.user_name}</p>}
           {event.follow.customer_reply&&<p className="subtle">客户回复：{event.follow.customer_reply}</p>}
           <small>{event.created_at}{event.follow.next_follow_up_at&&` · 下次跟进 ${event.follow.next_follow_up_at}`}</small>
         </div>:<div className="event" key={`log-${event.id}`}>
