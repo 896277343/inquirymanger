@@ -7,7 +7,7 @@ import { acceptInquiry,markInquiryWon,moveNoReplyToPool,recordCommunication,reop
 import { mailContext } from "@/lib/mail-template";
 import { EmailSendPanel } from "./email-send-panel";
 import { resolveEmailSendAttempt } from "./email-actions";
-import { emailStageName, firstEmailSent, nextEmailStage } from "@/lib/email-stage";
+import { emailStageName, firstCommunicationRecorded, firstEmailSent, nextEmailStage } from "@/lib/email-stage";
 import { cleanMailHtml } from "@/lib/mail-html";
 import { plainTextToHtml } from "@/lib/mail-template";
 import { GoogleSearchField } from "./google-search-field";
@@ -76,6 +76,7 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
   const smtpAccount=s.role==="SALES"?row<{email:string}>("SELECT email FROM smtp_accounts WHERE user_id=?",s.id):null;
   const emailTemplates=s.role==="SALES"&&emailStage?rows<{id:number;name:string;subject:string;body:string;body_html:string|null}>(emailStage===4?"SELECT id,name,subject,body,body_html FROM email_templates WHERE user_id=? ORDER BY stage,id":"SELECT id,name,subject,body,body_html FROM email_templates WHERE user_id=? AND stage=? ORDER BY id",...(emailStage===4?[s.id]:[s.id,emailStage])).map(template=>({id:template.id,name:template.name,subject:template.subject,body:template.body,bodyHtml:cleanMailHtml(template.body_html||plainTextToHtml(template.body))})):[];
   const firstEmailConfirmed=Boolean(q.accepted_at&&firstEmailSent(id));
+  const firstManualConfirmed=Boolean(q.accepted_at&&firstCommunicationRecorded(id));
   const isPublicPool=q.status==="NO_REPLY"||q.status==="PUBLIC_POOL";
   return <>
     <div className="topline"><div><div className="title">{q.inquiry_no}</div><p className="subtle">{q.company||q.name||q.primary_email} · {q.product_category}</p></div><span className="badge badge-green">{statuses[q.status]}</span></div>
@@ -85,7 +86,7 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
     <div className={s.role==="SALES"?"grid2":undefined}>
     {s.role==="SALES"&&<section className="panel"><div className="toolbar"><div><strong>内部转交询盘</strong><p className="subtle">转交后你将无法再查看；原跟进记录保留，接收人需要重新接受询盘</p></div></div><form action={transferInquiry} className="actions"><input type="hidden" name="id" value={id}/><select name="target" required defaultValue=""><option value="" disabled>选择接收业务员</option>{staff.filter(u=>u.id!==s.id).map(u=><option value={u.id} key={u.id}>{u.display_name}</option>)}</select><button className="btn btn-primary" disabled={staff.filter(u=>u.id!==s.id).length===0}>确认转交</button></form></section>}
     <section className="panel"><strong>接受询盘 / 第一次沟通</strong>
-      {q.accepted_at?<div style={{marginTop:18}}><span className="badge badge-green">{firstEmailConfirmed?"第一次邮件已通过系统发送":"已接受，系统尚无首次发信记录"}</span>
+      {q.accepted_at?<div style={{marginTop:18}}><span className="badge badge-green">{firstEmailConfirmed?"第一次邮件已通过系统发送":firstManualConfirmed?"第一次沟通已手动记录":"已接受，等待第一次沟通"}</span>
         <p>接受时间：{q.accepted_at.slice(0,16)}</p>
       </div>:s.role==="SALES"?<form action={acceptInquiry}>
         <input type="hidden" name="id" value={id}/>
@@ -102,11 +103,12 @@ export default async function Detail({params}:{params:Promise<{id:string}>}){
       <section className="panel"><strong>沟通进度与结果</strong>
         <p>当前阶段：<strong>{statuses[q.status]||q.status}</strong></p>
         {q.next_follow_up_at&&<p>提醒时间：{q.next_follow_up_at.slice(0,16)}{q.reminder_overdue_at&&` · 逾期时间：${q.reminder_overdue_at.slice(0,16)}`}</p>}
-        {s.role==="SALES"&&q.accepted_at&&["CONTACTING","SECOND_CONTACT","THIRD_CONTACT","ONGOING"].includes(q.status)&&<form action={recordCommunication}>
+        {s.role==="SALES"&&q.accepted_at&&["ACCEPTED","CONTACTING","SECOND_CONTACT","THIRD_CONTACT","ONGOING"].includes(q.status)&&<form action={recordCommunication}>
           <input type="hidden" name="id" value={id}/>
+          {q.status==="ACCEPTED"&&<p className="subtle">如果已在线下完成首次沟通，可在此补录；请在沟通说明中写明实际联系时间。补录时间和操作人会进入处理时间线。</p>}
           <label className="field">本次沟通方式<select name="method"><option>邮件</option><option>WhatsApp</option><option>邮件 + WhatsApp</option><option>电话</option><option>在线聊天</option><option>视频会议</option><option>其他</option></select></label>
-          <label className="field">沟通说明（可选）<textarea name="note" maxLength={2000} placeholder="例如：已发送第二封邮件，等待客户回复"/></label>
-          <button className="btn btn-primary">{q.status==="CONTACTING"?"确认第二次沟通":q.status==="SECOND_CONTACT"?"确认第三次沟通":"记录本次持续沟通"}</button>
+          <label className="field">沟通说明{q.status==="ACCEPTED"?"（请写明实际联系时间）":"（可选）"}<textarea name="note" maxLength={2000} required={q.status==="ACCEPTED"} placeholder={q.status==="ACCEPTED"?"例如：11月23日已用企业邮箱发送首次开发信，客户尚未回复":"例如：已发送第二封邮件，等待客户回复"}/></label>
+          <button className="btn btn-primary">{q.status==="ACCEPTED"?"确认首次沟通（线下补录）":q.status==="CONTACTING"?"确认第二次沟通":q.status==="SECOND_CONTACT"?"确认第三次沟通":"记录本次持续沟通"}</button>
         </form>}
         {s.role==="SALES"&&["THIRD_CONTACT","ONGOING"].includes(q.status)&&<form action={moveNoReplyToPool} style={{marginTop:18}}>
           <input type="hidden" name="id" value={id}/>

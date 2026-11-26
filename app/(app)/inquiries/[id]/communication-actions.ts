@@ -53,6 +53,7 @@ export async function recordCommunication(formData: FormData) {
   try {
     const inquiry = row<OwnedInquiry>("SELECT id,inquiry_no,owner_id,status,accepted_at FROM inquiries WHERE id=?", id);
     if (!inquiry || inquiry.owner_id !== session.id || !inquiry.accepted_at) throw new Error("请先接受自己负责的询盘");
+    if (inquiry.status === "ACCEPTED" && !note) throw new Error("补录首次沟通时请写明实际联系时间和经过");
     if (row("SELECT 1 FROM email_send_events WHERE inquiry_id=? AND status IN ('SENDING','UNKNOWN','PARTIAL') LIMIT 1", id)) {
       throw new Error("开发信发送结果待核查，请先确认后再更新沟通阶段");
     }
@@ -60,6 +61,7 @@ export async function recordCommunication(formData: FormData) {
       throw new Error("沟通邮件发送结果待核查，请先确认后再更新沟通阶段");
     }
     const transition: Record<string, { status: string; label: string; days: number }> = {
+      ACCEPTED: { status: "CONTACTING", label: "第一次沟通", days: 3 },
       CONTACTING: { status: "SECOND_CONTACT", label: "第二次沟通", days: 3 },
       SECOND_CONTACT: { status: "THIRD_CONTACT", label: "第三次沟通", days: 5 },
       THIRD_CONTACT: { status: "ONGOING", label: "持续沟通", days: 5 },

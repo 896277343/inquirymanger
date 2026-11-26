@@ -5,10 +5,18 @@ export function firstEmailSent(inquiryId: number) {
     WHERE inquiry_id=? AND stage=1 AND status='ACCEPTED'`, inquiryId));
 }
 
+export function firstCommunicationRecorded(inquiryId: number) {
+  return Boolean(row<{ id: number }>(`SELECT id FROM audit_logs
+    WHERE entity_type='INQUIRY' AND entity_id=? AND action='FOLLOW_UP'
+      AND CASE WHEN json_valid(details) THEN json_extract(details,'$.before.status') END='ACCEPTED'
+      AND CASE WHEN json_valid(details) THEN json_extract(details,'$.after.status') END='CONTACTING'
+    LIMIT 1`, inquiryId));
+}
+
 export function nextEmailStage(inquiryId: number, status: string, acceptedAt: string | null) {
   if (!acceptedAt) return null;
   if (status === "ACCEPTED") return 1;
-  if (status === "CONTACTING") return firstEmailSent(inquiryId) ? 2 : 1;
+  if (status === "CONTACTING") return firstEmailSent(inquiryId) || firstCommunicationRecorded(inquiryId) ? 2 : 1;
   if (status === "SECOND_CONTACT") return 3;
   if (status === "THIRD_CONTACT" || status === "ONGOING") return 4;
   return null;
